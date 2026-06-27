@@ -228,8 +228,7 @@ class AlarmService : Service() {
             if (Build.VERSION.SDK_INT >= 36) {
                 ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOW_ALWAYS
             } else {
-                @Suppress("DEPRECATION")
-                ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
+                @Suppress("DEPRECATION") ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED
             }
 
         return ActivityOptions.makeBasic()

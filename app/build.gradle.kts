@@ -14,12 +14,12 @@ kotlin {
 
 android {
     namespace = "com.dsalmun.luxalarm"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.dsalmun.luxalarm"
         minSdk = 28
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 10
         versionName = "2.2.2"
 

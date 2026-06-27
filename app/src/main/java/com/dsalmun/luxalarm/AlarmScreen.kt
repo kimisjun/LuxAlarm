@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -50,9 +51,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsalmun.luxalarm.data.AlarmItem
 import java.util.Calendar
-import java.util.Locale
 import kotlinx.coroutines.flow.collectLatest
-import androidx.compose.ui.platform.LocalLocale
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -302,7 +301,12 @@ fun AlarmRow(
             ) {
                 Text(
                     text =
-                        String.format(LocalLocale.current.platformLocale, "%02d:%02d", alarm.hour, alarm.minute),
+                        String.format(
+                            LocalLocale.current.platformLocale,
+                            "%02d:%02d",
+                            alarm.hour,
+                            alarm.minute,
+                        ),
                     fontSize = 48.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.clickable(onClick = onTimeClick),
@@ -469,19 +473,18 @@ fun formatRepeatDays(days: Set<Int>, hour: Int, minute: Int): String {
     if (days.size == 7) return "Every day"
 
     val sortedDays = days.toSortedSet()
-    val dayNames =
-        sortedDays.map {
-            when (it) {
-                Calendar.SUNDAY -> "Sun"
-                Calendar.MONDAY -> "Mon"
-                Calendar.TUESDAY -> "Tue"
-                Calendar.WEDNESDAY -> "Wed"
-                Calendar.THURSDAY -> "Thu"
-                Calendar.FRIDAY -> "Fri"
-                Calendar.SATURDAY -> "Sat"
-                else -> ""
-            }
+    val dayNames = sortedDays.map {
+        when (it) {
+            Calendar.SUNDAY -> "Sun"
+            Calendar.MONDAY -> "Mon"
+            Calendar.TUESDAY -> "Tue"
+            Calendar.WEDNESDAY -> "Wed"
+            Calendar.THURSDAY -> "Thu"
+            Calendar.FRIDAY -> "Fri"
+            Calendar.SATURDAY -> "Sat"
+            else -> ""
         }
+    }
     return dayNames.joinToString(", ")
 }
 

@@ -127,10 +127,9 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
             return false
         }
 
-        val alarmTriggers =
-            activeAlarms.map { alarm ->
-                alarm to calculateNextTrigger(alarm.hour, alarm.minute, alarm.repeatDays)
-            }
+        val alarmTriggers = activeAlarms.map { alarm ->
+            alarm to calculateNextTrigger(alarm.hour, alarm.minute, alarm.repeatDays)
+        }
 
         val minTriggerTime = alarmTriggers.minOf { it.second }
 
