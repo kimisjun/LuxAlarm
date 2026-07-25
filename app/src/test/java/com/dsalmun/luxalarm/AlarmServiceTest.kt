@@ -37,7 +37,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -198,12 +197,10 @@ class AlarmServiceTest {
     }
 
     @Test
-    fun onBind_exposesTheServiceInstance() {
+    fun onBind_refusesBinding() {
         val service = start()
 
-        val binder = service.onBind(Intent(context, AlarmService::class.java))
-
-        assertSame(service, (binder as AlarmService.LocalBinder).getService())
+        assertNull(service.onBind(Intent(context, AlarmService::class.java)))
     }
 
     @Test

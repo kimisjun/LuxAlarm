@@ -32,7 +32,6 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
-import android.os.Binder
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -52,11 +51,6 @@ class AlarmService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var vibrator: Vibrator? = null
     private var alarmStopped = false
-    private val binder = LocalBinder()
-
-    inner class LocalBinder : Binder() {
-        fun getService(): AlarmService = this@AlarmService
-    }
 
     companion object {
         const val ACTION_STOP_ALARM = "com.dsalmun.luxalarm.STOP_ALARM"
@@ -66,7 +60,8 @@ class AlarmService : Service() {
             @VisibleForTesting internal set
     }
 
-    override fun onBind(intent: Intent?): IBinder = binder
+    /** Started, never bound: the alarm outlives any client, so there is nothing to bind to. */
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         return when (intent?.action) {
