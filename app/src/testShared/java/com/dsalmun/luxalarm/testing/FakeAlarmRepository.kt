@@ -123,10 +123,10 @@ class FakeAlarmRepository : IAlarmRepository {
         lastVibrationEnabled = enabled
     }
 
-    override suspend fun skipAlarms(ids: List<Int>, triggerMillis: Long): Boolean {
+    override suspend fun skipAlarms(ids: List<Int>, dismissedTriggerMillis: Long): Boolean {
         skipAlarmsCallCount++
         lastSkipIds = ids
-        lastSkipTriggerMillis = triggerMillis
+        lastSkipTriggerMillis = dismissedTriggerMillis
         return shouldSucceed
     }
 

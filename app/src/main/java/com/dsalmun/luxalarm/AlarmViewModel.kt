@@ -126,10 +126,10 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
 
     /** Backs the inline "Dismiss" on a card inside the upcoming window. */
     fun skipNext(alarm: AlarmItem) {
-        val rawNext =
+        val dismissed =
             nextTrigger(alarm.hour, alarm.minute, alarm.repeatDays, System.currentTimeMillis())
         viewModelScope.launch {
-            if (!repository.skipAlarms(listOf(alarm.id), rawNext)) {
+            if (!repository.skipAlarms(listOf(alarm.id), dismissed)) {
                 _events.emit(Event.ShowPermissionError)
             }
         }

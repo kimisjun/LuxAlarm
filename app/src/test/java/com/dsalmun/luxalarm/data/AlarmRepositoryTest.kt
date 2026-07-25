@@ -25,6 +25,7 @@ import androidx.core.content.edit
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.UpcomingAlarmNotifier
+import com.dsalmun.luxalarm.UpcomingAlarmReceiver
 import com.dsalmun.luxalarm.testing.pinLocalHourTo
 import com.dsalmun.luxalarm.testing.restoreSystemTimeZone
 import java.util.Calendar
@@ -59,6 +60,9 @@ class AlarmRepositoryTest {
 
         /** Far enough from midnight that shifting the zone cannot move the date. */
         const val MIDDAY = 12
+
+        /** Close enough to midnight that shifting the zone does move the date. */
+        const val MIDNIGHT = 0
 
         val EVERY_DAY = setOf(1, 2, 3, 4, 5, 6, 7)
     }
@@ -132,12 +136,28 @@ class AlarmRepositoryTest {
 
     @Test
     fun skipAlarms_unknownId_isIgnored() {
-        insertAlarm(id = 1, hour = 8, minute = 0, repeatDays = EVERY_DAY)
+        val (hour, minute) = clockTimeIn(THIRTY_MINUTES)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        val skipped = nextTrigger(hour, minute, EVERY_DAY, System.currentTimeMillis())
 
-        val result = runBlocking { repository.skipAlarms(listOf(1, 99), 123L) }
+        val result = runBlocking { repository.skipAlarms(listOf(1, 99), skipped) }
 
         assertTrue(result, "A missing id should be skipped over, not fail the whole call")
-        assertEquals(localDayOf(123L), dao.alarm(1).skippedOccurrenceDay)
+        assertEquals(localDayOf(skipped), dao.alarm(1).skippedOccurrenceDay)
+    }
+
+    @Test
+    fun skipAlarms_forAnOccurrenceAlreadyPast_changesNothing() {
+        val (hour, minute) = clockTimeIn(THIRTY_MINUTES)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+
+        val rung = System.currentTimeMillis() - ONE_HOUR
+        assertTrue(runBlocking { repository.skipAlarms(listOf(1), rung) })
+
+        assertNull(
+            dao.alarm(1).skippedOccurrenceDay,
+            "A notice left over from an alarm that rang must not silence the next one",
+        )
     }
 
     @Test
@@ -347,9 +367,98 @@ class AlarmRepositoryTest {
         assertEquals(hour to minute, localTimeOf(armed))
     }
 
-    /** Positive is east. The id must stay a GMT offset — `localDayOf` resolves it via `ZoneId`. */
+    /** A stale instant would read as already rung, and the notice would quote the wrong time. */
+    @Test
+    fun scheduleNextAlarm_afterATimeZoneChange_refreshesTheDismissActionsInstant() {
+        pinLocalHourTo(MIDDAY)
+        val (hour, minute) = clockTimeIn(THIRTY_MINUTES)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+        val armedBefore = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+        assertEquals(armedBefore, dismissTriggerMillis(), "Precondition: Dismiss names the alarm")
+
+        // One hour west: 90 minutes out now, so the notice stays up.
+        shiftZoneBy(-1)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        val armedAfter = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+        assertNotNull(upcomingNotification(), "Precondition: still inside the window")
+        assertEquals(
+            armedAfter,
+            dismissTriggerMillis(),
+            "Dismiss must name the re-armed occurrence, not the pre-change instant",
+        )
+    }
+
+    /** The same invariant one step earlier: this instant is what ACTION_SHOW hands the notifier. */
+    @Test
+    fun scheduleNextAlarm_afterATimeZoneChange_refreshesThePendingShowAlarmsInstant() {
+        pinLocalHourTo(MIDDAY)
+        val (hour, minute) = clockTimeIn(THREE_HOURS)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+        assertNotNull(scheduledShowAlarm(), "Precondition: outside the window, so it is armed")
+
+        shiftZoneBy(-1)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        val armedAfter = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+        assertEquals(
+            armedAfter,
+            showAlarmTriggerMillis(),
+            "The show alarm carries the instant into the notification, so it has to move too",
+        )
+    }
+
+    /** A zone change with no reschedule leaves Dismiss naming an instant from the old offset. */
+    @Test
+    fun skipAlarms_withAnInstantFromTheOldZone_skipsTheOccurrenceThatIsNextNow() {
+        pinLocalTimeTo(MIDNIGHT)
+        val (hour, minute) = clockTimeIn(THIRTY_MINUTES)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+        val dismissed = assertNotNull(dismissTriggerMillis())
+
+        // One hour west: 00:30 today, but yesterday's 23:30 in the zone just left behind.
+        shiftZoneBy(-1)
+        val next = nextTrigger(hour, minute, EVERY_DAY, System.currentTimeMillis())
+        assertEquals(
+            localDayOf(dismissed) + 1,
+            localDayOf(next),
+            "Precondition: the instant now names the previous local day",
+        )
+
+        assertTrue(runBlocking { repository.skipAlarms(listOf(1), dismissed) })
+
+        assertEquals(
+            localDayOf(next),
+            dao.alarm(1).skippedOccurrenceDay,
+            "The skip must name the occurrence that is next in this zone",
+        )
+        assertEquals(
+            next + 24 * 60 * 60 * 1000L,
+            scheduledAlarmClock()?.triggerAtMs,
+            "A skip resolved from the stale instant would leave that occurrence armed",
+        )
+    }
+
+    /** Positive is east. */
     private fun shiftZoneBy(hours: Int) {
-        val minutes = (TimeZone.getDefault().rawOffset + hours * ONE_HOUR.toInt()) / 60_000
+        setZoneToOffset(TimeZone.getDefault().rawOffset / 60_000 + hours * 60)
+    }
+
+    /** Pins "now" to [hour]:00 exactly; [pinLocalHourTo] leaves the minute to the real clock. */
+    private fun pinLocalTimeTo(hour: Int) {
+        val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        val nowMinutes = utc[Calendar.HOUR_OF_DAY] * 60 + utc[Calendar.MINUTE]
+        // Real offsets stop at +14, so anything beyond becomes the equivalent negative one.
+        val offset =
+            (hour * 60 - nowMinutes).mod(24 * 60).let { if (it > 14 * 60) it - 24 * 60 else it }
+        setZoneToOffset(offset)
+    }
+
+    /** The id must stay a GMT offset — `localDayOf` resolves it via `ZoneId`. */
+    private fun setZoneToOffset(minutes: Int) {
         val sign = if (minutes < 0) "-" else "+"
         val magnitude = abs(minutes)
         TimeZone.setDefault(
@@ -405,4 +514,21 @@ class AlarmRepositoryTest {
 
     private fun scheduledShowAlarm(): ShadowAlarmManager.ScheduledAlarm? =
         shadowOf(alarmManager).scheduledAlarms.firstOrNull { it.alarmClockInfo == null }
+
+    /** The instant the notification's Dismiss action would forward to `skipAlarms`. */
+    private fun dismissTriggerMillis(): Long? =
+        upcomingNotification()
+            ?.actions
+            ?.map { shadowOf(it.actionIntent).savedIntent }
+            ?.single { it.action == UpcomingAlarmReceiver.ACTION_SKIP }
+            ?.getLongExtra(UpcomingAlarmReceiver.EXTRA_TRIGGER_MILLIS, 0L)
+
+    /** The instant the armed ACTION_SHOW broadcast would post the notification for. */
+    @Suppress("DEPRECATION") // ScheduledAlarm offers no accessor for `operation`.
+    private fun showAlarmTriggerMillis(): Long? =
+        scheduledShowAlarm()?.let {
+            shadowOf(it.operation)
+                .savedIntent
+                .getLongExtra(UpcomingAlarmReceiver.EXTRA_TRIGGER_MILLIS, 0L)
+        }
 }

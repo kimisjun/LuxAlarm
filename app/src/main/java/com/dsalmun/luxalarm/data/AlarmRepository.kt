@@ -94,10 +94,11 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         scheduleNextAlarm()
     }
 
-    override suspend fun skipAlarms(ids: List<Int>, triggerMillis: Long): Boolean {
-        // The caller names the occurrence by the instant it was armed for. Resolve it to a local
-        // day here, in the current zone, so the stored skip survives a later time-zone change.
-        val skipDay = localDayOf(triggerMillis)
+    override suspend fun skipAlarms(ids: List<Int>, dismissedTriggerMillis: Long): Boolean {
+        val now = System.currentTimeMillis()
+        // Already rung: a notice left over from it must not silence the occurrence after.
+        if (dismissedTriggerMillis < now) return true
+
         val originals = mutableListOf<AlarmItem>()
         for (id in ids) {
             val alarm = alarmDao.getAlarmById(id) ?: continue
@@ -106,7 +107,9 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
                     // One-shot: Google Clock's Dismiss turns the alarm off entirely.
                     alarm.copy(isActive = false)
                 } else {
-                    alarm.copy(skippedOccurrenceDay = skipDay)
+                    // Not [dismissedTriggerMillis]: it carries the offset it was armed in.
+                    val skipped = nextTrigger(alarm.hour, alarm.minute, alarm.repeatDays, now)
+                    alarm.copy(skippedOccurrenceDay = localDayOf(skipped))
                 }
             originals.add(alarm)
             alarmDao.update(updated)
