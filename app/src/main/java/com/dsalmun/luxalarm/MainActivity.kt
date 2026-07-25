@@ -24,11 +24,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.runtime.*
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
@@ -69,18 +67,7 @@ class MainActivity : ComponentActivity() {
         requestRequiredPermissions()
 
         enableEdgeToEdge()
-        setContent {
-            LuxAlarmTheme {
-                var showSettings by remember { mutableStateOf(false) }
-
-                BackHandler(enabled = showSettings) { showSettings = false }
-                if (showSettings) {
-                    SettingsScreen(onBackClick = { showSettings = false })
-                } else {
-                    AlarmScreen(onSettingsClick = { showSettings = true })
-                }
-            }
-        }
+        setContent { LuxAlarmTheme { LuxAlarmApp() } }
     }
 
     private fun requestRequiredPermissions() {

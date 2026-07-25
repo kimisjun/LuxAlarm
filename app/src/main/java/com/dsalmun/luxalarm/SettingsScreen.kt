@@ -81,14 +81,34 @@ fun rememberLightSensorValue(): Float {
     return lightLevel
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Both dependencies are defaulted parameters so a test can supply its own. */
 @Composable
-fun SettingsScreen(onBackClick: () -> Unit) {
-    val settingsManager = remember { AppContainer.settingsManager }
+fun SettingsScreen(
+    onBackClick: () -> Unit,
+    settingsManager: SettingsManager = remember { AppContainer.settingsManager },
+    currentLightLevel: Float = rememberLightSensorValue(),
+) {
     val requiredLuxLevel by settingsManager.requiredLuxLevel.collectAsState()
     var sliderValue by remember(requiredLuxLevel) { mutableFloatStateOf(requiredLuxLevel) }
-    val currentLightLevel = rememberLightSensorValue()
 
+    SettingsScreenContent(
+        requiredLuxLevel = sliderValue,
+        currentLightLevel = currentLightLevel,
+        onBackClick = onBackClick,
+        onLuxLevelChange = { sliderValue = it },
+        onLuxLevelChangeFinished = { settingsManager.setRequiredLuxLevel(sliderValue) },
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SettingsScreenContent(
+    requiredLuxLevel: Float,
+    currentLightLevel: Float,
+    onBackClick: () -> Unit,
+    onLuxLevelChange: (Float) -> Unit,
+    onLuxLevelChangeFinished: () -> Unit,
+) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -115,17 +135,17 @@ fun SettingsScreen(onBackClick: () -> Unit) {
             verticalArrangement = Arrangement.Top,
         ) {
             LuxLevelSetting(
-                currentValue = sliderValue,
+                currentValue = requiredLuxLevel,
                 currentLightLevel = currentLightLevel,
-                onValueChange = { sliderValue = it },
-                onValueChangeFinished = { settingsManager.setRequiredLuxLevel(sliderValue) },
+                onValueChange = onLuxLevelChange,
+                onValueChangeFinished = onLuxLevelChangeFinished,
             )
         }
     }
 }
 
 @Composable
-private fun LuxLevelSetting(
+internal fun LuxLevelSetting(
     currentValue: Float,
     currentLightLevel: Float,
     onValueChange: (Float) -> Unit,

@@ -17,9 +17,11 @@
 package com.dsalmun.luxalarm
 
 import android.app.Application
+import androidx.annotation.VisibleForTesting
 import com.dsalmun.luxalarm.data.AlarmDatabase
 import com.dsalmun.luxalarm.data.AlarmRepository
 import com.dsalmun.luxalarm.data.IAlarmRepository
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -29,6 +31,9 @@ class AppContainer : Application() {
         lateinit var database: AlarmDatabase
         lateinit var repository: IAlarmRepository
         lateinit var settingsManager: SettingsManager
+
+        /** Backs the work the broadcast receivers start behind `goAsync()`. */
+        @VisibleForTesting var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     }
 
     override fun onCreate() {

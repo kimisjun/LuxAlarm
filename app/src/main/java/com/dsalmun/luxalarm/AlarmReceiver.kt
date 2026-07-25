@@ -21,7 +21,6 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class AlarmReceiver : BroadcastReceiver() {
@@ -45,7 +44,7 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         val pendingResult = goAsync()
-        CoroutineScope(Dispatchers.IO).launch {
+        CoroutineScope(AppContainer.ioDispatcher).launch {
             try {
                 AppContainer.repository.deactivateOneShotAlarms(alarmIds.toList())
                 AppContainer.repository.scheduleNextAlarm()
