@@ -127,8 +127,7 @@ class AlarmSchedulingTest {
 
     @Test
     fun repeating_skipSurvivesATimeZoneChange() {
-        // Skipped in Madrid, then the device moves to New York: a different instant, the same
-        // calendar day, so the skip still holds.
+        // Madrid then New York: a different instant, the same calendar day, so the skip holds.
         TimeZone.setDefault(TimeZone.getTimeZone("Europe/Madrid"))
         val now = millisAt(2026, 7, 24, 20, 0)
         val skipDay = localDayOf(nextTrigger(7, 0, EVERY_DAY, now))

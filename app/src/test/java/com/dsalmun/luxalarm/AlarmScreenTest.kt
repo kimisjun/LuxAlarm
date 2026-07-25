@@ -60,10 +60,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.shadows.ShadowToast
 
-/**
- * The alarm list over a real [AlarmViewModel] and a fake repository, so the screen's own state —
- * which dialog is open, add versus edit — is exercised rather than stubbed.
- */
+/** The list over a real [AlarmViewModel], so the screen's own state is exercised, not stubbed. */
 @RunWith(AndroidJUnit4::class)
 class AlarmScreenTest {
     private companion object {
@@ -110,7 +107,7 @@ class AlarmScreenTest {
         composeRule.onNodeWithText("Set Alarm Time").assertDoesNotExist()
     }
 
-    /** The add-versus-edit branch: editing an existing row must not create a second alarm. */
+    /** Editing an existing row must not create a second alarm. */
     @Test
     fun tappingTheTime_opensThePickerInEditMode() {
         setContent(alarm(id = 5, hour = 7, minute = 5))
@@ -344,10 +341,7 @@ class AlarmScreenTest {
         assertEquals(2, picker.launched.size)
     }
 
-    /**
-     * The only tests that drop the naming seam for the real [RingtoneManager]. Nothing resolves
-     * under Robolectric, so both pin that an unresolvable ringtone degrades to a label.
-     */
+    /** Drops the naming seam: nothing resolves under Robolectric, so the label degrades. */
     @Test
     fun aRingtoneThatCannotBeResolved_isLabelledUnknown() {
         setContentWithRealRingtoneLookup(alarm(id = 5, ringtoneUri = "content://media/gone/1"))
@@ -385,10 +379,7 @@ class AlarmScreenTest {
         assertToastSays("Cannot schedule exact alarms. Please grant permission in settings.")
     }
 
-    /**
-     * The toast recomputes the countdown from the wall clock, so pin the hour: an alarm an hour
-     * ahead of 23:xx lands tomorrow and reads differently.
-     */
+    /** The toast recomputes from the wall clock; an hour past 23:xx lands tomorrow. */
     @Test
     fun turningOnAnAlarm_countsTheMinutesUntilItRings() {
         pinLocalHourTo(10)
@@ -455,7 +446,6 @@ class AlarmScreenTest {
         restoreSystemTimeZone()
     }
 
-    /** Seeds one alarm, expands it and taps the ringtone row, returning the picker double. */
     private fun openTheRingtonePicker(alarm: AlarmItem): FakeRingtonePicker {
         val picker = FakeRingtonePicker()
         setContent(alarm, registry = picker)
@@ -464,7 +454,6 @@ class AlarmScreenTest {
         return picker
     }
 
-    /** Uses [AlarmScreen]'s own ringtone naming rather than the seam. */
     private fun setContentWithRealRingtoneLookup(alarm: AlarmItem) {
         repository.setAlarms(listOf(alarm))
         val viewModel = AlarmViewModel(repository)
@@ -492,10 +481,7 @@ class AlarmScreenTest {
     private fun dayOfWeekIn(days: Int): Int =
         Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, days) }[Calendar.DAY_OF_WEEK]
 
-    /**
-     * From the unmerged tree: the merged one resolves to the whole card, whose centre is the volume
-     * slider, and the slider eats the click.
-     */
+    /** Unmerged: the merged tree resolves to the card, whose centre slider eats the click. */
     private fun chevron(): SemanticsNodeInteraction =
         composeRule.onNode(
             hasContentDescription("Expand") or hasContentDescription("Collapse"),
@@ -541,10 +527,7 @@ class AlarmScreenTest {
         }
     }
 
-    /**
-     * Stands in for the system ringtone picker. Results are delivered explicitly rather than
-     * inline, which is what makes the "tapped twice before it opened" case reachable.
-     */
+    /** Results are delivered explicitly, making "tapped twice before it opened" reachable. */
     private class FakeRingtonePicker : ActivityResultRegistry() {
         val launched = mutableListOf<Intent>()
         private var pending: Int? = null

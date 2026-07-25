@@ -111,10 +111,7 @@ class SettingsManagerTest {
         assertEquals(300f, fresh.requiredLuxLevel.value, "The StateFlow is seeded from storage")
     }
 
-    /**
-     * The StateFlow is per-instance and ignores SharedPreferences changes, so a second instance
-     * goes stale. Harmless while [AppContainer] builds exactly one.
-     */
+    /** The StateFlow is per-instance; harmless while [AppContainer] builds exactly one. */
     @Test
     fun aSecondInstance_doesNotSeeLaterWritesFromTheFirst() {
         val first = SettingsManager(context)
@@ -130,10 +127,7 @@ class SettingsManagerTest {
         )
     }
 
-    /**
-     * Nothing clamps to MIN/MAX_LUX_LEVEL. Unreachable today — only the slider's `valueRange`
-     * writes — but a threshold above any achievable reading would leave an alarm un-dismissable.
-     */
+    /** Unreachable today, but an unclamped threshold would leave an alarm un-dismissable. */
     @Test
     fun setRequiredLuxLevel_isNotClampedToTheAdvertisedRange() {
         val manager = SettingsManager(context)

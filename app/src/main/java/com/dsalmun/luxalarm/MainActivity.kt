@@ -27,9 +27,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.VisibleForTesting
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
+import androidx.lifecycle.lifecycleScope
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     private val requestNotificationPermissionLauncher =
@@ -40,11 +43,18 @@ class MainActivity : ComponentActivity() {
 
     private val requestExactAlarmPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            // Check if permission was granted after returning from settings
-            if (!AppContainer.repository.canScheduleExactAlarms()) {
-                // TODO: User didn't grant permission. Show a dialog explaining why it's needed
-            }
+            onExactAlarmPermissionResult()
         }
+
+    /** Granting the permission does not re-arm the alarms its revocation cancelled. */
+    @VisibleForTesting
+    internal fun onExactAlarmPermissionResult() {
+        if (AppContainer.repository.canScheduleExactAlarms()) {
+            lifecycleScope.launch { AppContainer.repository.scheduleNextAlarm() }
+        } else {
+            // TODO: User didn't grant permission. Show a dialog explaining why it's needed
+        }
+    }
 
     override fun onResume() {
         super.onResume()

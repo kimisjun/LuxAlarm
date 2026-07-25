@@ -22,10 +22,7 @@ import java.util.Calendar
 import kotlin.test.assertEquals
 import org.junit.Test
 
-/**
- * The repeat-day subtitle. `AlarmScreenContentTest` renders it for two cases; here every day
- * constant and the out-of-range fallback are cheap to reach.
- */
+/** Every day constant and the out-of-range fallback, cheaper to reach than through the screen. */
 class FormatRepeatDaysTest {
     private companion object {
         /** Only read when the day set is empty. */
@@ -51,7 +48,6 @@ class FormatRepeatDaysTest {
         }
     }
 
-    /** The set is unordered, so the label sorts it. */
     @Test
     fun daysAreListedInWeekOrder() {
         val outOfOrder = setOf(Calendar.SATURDAY, Calendar.SUNDAY, Calendar.FRIDAY)

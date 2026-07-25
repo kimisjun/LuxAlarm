@@ -32,10 +32,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/**
- * The POST_NOTIFICATIONS guard. The permission can be revoked after an alarm is scheduled, and some
- * OEMs throw from `notify()` rather than no-opping. Nothing else covers the denied case.
- */
+/** The POST_NOTIFICATIONS guard: some OEMs throw from `notify()` rather than no-opping. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class UpcomingAlarmNotifierTest {

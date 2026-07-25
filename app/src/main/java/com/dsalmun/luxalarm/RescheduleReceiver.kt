@@ -16,33 +16,42 @@
  */
 package com.dsalmun.luxalarm
 
+import android.annotation.SuppressLint
+import android.app.AlarmManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-class BootReceiver : BroadcastReceiver() {
+/**
+ * Re-arms the next alarm after an event that invalidates the one already scheduled.
+ *
+ * Separate from [BootReceiver], which also clears the ringing flag: right after a reboot, wrong if
+ * a time-zone change lands mid-ring.
+ */
+class RescheduleReceiver : BroadcastReceiver() {
     companion object {
-        /** Some OEMs send a quick-boot action instead of `BOOT_COMPLETED`. */
-        private val BOOT_ACTIONS =
+        /** Inlined at compile time. Only reaches SCHEDULE_EXACT_ALARM holders, so never API 33+. */
+        @SuppressLint("InlinedApi")
+        private const val ACTION_EXACT_ALARM_STATE_CHANGED =
+            AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED
+
+        private val HANDLED_ACTIONS =
             setOf(
-                Intent.ACTION_BOOT_COMPLETED,
-                "android.intent.action.QUICKBOOT_POWERON",
-                "com.htc.intent.action.QUICKBOOT_POWERON",
+                Intent.ACTION_TIMEZONE_CHANGED,
+                Intent.ACTION_TIME_CHANGED,
+                Intent.ACTION_MY_PACKAGE_REPLACED,
+                ACTION_EXACT_ALARM_STATE_CHANGED,
             )
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
-        if (intent?.action !in BOOT_ACTIONS) return
+        if (intent?.action !in HANDLED_ACTIONS) return
 
         val pendingResult = goAsync()
         CoroutineScope(AppContainer.ioDispatcher).launch {
             try {
-                // The HTC action is unprotected, so a spoofed one must not strand a live alarm.
-                if (!AlarmService.isRunning) {
-                    AppContainer.repository.clearRingingAlarm()
-                }
                 AppContainer.repository.scheduleNextAlarm()
             } finally {
                 pendingResult.finish()

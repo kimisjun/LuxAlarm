@@ -27,12 +27,9 @@ import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 
 /**
- * Points the [AppContainer] service locator at test doubles. Drive the receivers' `goAsync` work
- * with [scheduler]: `runCurrent()` runs what is queued, so a test can assert either side of it.
- *
- * **Known limitation:** the `lateinit var`s cannot be un-set, so this guarantees overwrite-before-
- * use, not clearing. Robolectric reuses one sandbox classloader per SDK, so a class that reaches
- * `AppContainer` without this rule inherits the previous class's doubles — apply it everywhere.
+ * Points the [AppContainer] service locator at test doubles; drive `goAsync` work with [scheduler].
+ * The `lateinit var`s cannot be un-set and Robolectric reuses one classloader per SDK, so apply
+ * this everywhere: a class without it inherits the previous class's doubles.
  */
 class AppContainerTestRule(val repository: FakeAlarmRepository = FakeAlarmRepository()) :
     TestWatcher() {

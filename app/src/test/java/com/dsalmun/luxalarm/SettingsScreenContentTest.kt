@@ -33,10 +33,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * The threshold branch also drives colour, which semantics cannot see; these pin the text half
- * only, and the colour half would need screenshot tests this project does not have.
- */
+/** The threshold branch also drives colour, which semantics cannot see; text only here. */
 @RunWith(AndroidJUnit4::class)
 class SettingsScreenContentTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()

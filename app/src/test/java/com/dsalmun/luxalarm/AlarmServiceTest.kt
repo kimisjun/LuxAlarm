@@ -52,10 +52,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.util.DataSource
 
-/**
- * [AlarmService] owns the ringing alarm — notification, ringtone, vibration — and above all the
- * teardown, because a ringing alarm that cannot be stopped is the worst failure this app has.
- */
+/** Above all the teardown: a ringing alarm that cannot be stopped is this app's worst failure. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class AlarmServiceTest {
@@ -93,8 +90,7 @@ class AlarmServiceTest {
         context = ApplicationProvider.getApplicationContext()
         defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
 
-        // Robolectric refuses to prepare a data source it has never heard of — which is what the
-        // fallback relies on, so BROKEN_RINGTONE is left unregistered.
+        // The fallback relies on this, so BROKEN_RINGTONE is deliberately left unregistered.
         ShadowMediaPlayer.addMediaInfo(
             DataSource.toDataSource(context, defaultUri),
             ShadowMediaPlayer.MediaInfo(5_000, 0),
@@ -274,10 +270,7 @@ class AlarmServiceTest {
         assertEquals(0.25f, shadowOf(player).rightVolume)
     }
 
-    /**
-     * With both the chosen ringtone and the default gone, the other two signals still have to run —
-     * the case that split notification, ringtone and vibration into separately guarded steps.
-     */
+    /** The case that split notification, ringtone and vibration into separately guarded steps. */
     @Test
     fun start_whenEveryRingtoneFails_stillShowsAndVibrates() {
         ShadowMediaPlayer.addException(
@@ -338,10 +331,7 @@ class AlarmServiceTest {
         assertNotNull(shadowOf(audioManager).lastAbandonedAudioFocusRequest)
     }
 
-    /**
-     * Three version gates in `startAlarm` take their other path at `minSdk`, and every other test
-     * here runs on the newest SDK.
-     */
+    /** Three version gates in `startAlarm` take their other path at `minSdk`. */
     @Test
     @Config(sdk = [Build.VERSION_CODES.P])
     fun onTheOldestSupportedAndroid_theAlarmStillRingsAndVibrates() {

@@ -36,10 +36,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
-/**
- * Dismiss clears the notification *before* the skip runs, so a skip that fails has to put it back —
- * otherwise the alarm is silently un-skipped with nothing on screen to say so.
- */
+/** A skip that fails has to put the notification back, or the alarm is silently un-skipped. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class UpcomingAlarmReceiverTest {
@@ -101,10 +98,7 @@ class UpcomingAlarmReceiverTest {
         assertEquals(TRIGGER_MILLIS, repository.lastSkipTriggerMillis)
     }
 
-    /**
-     * Cancel comes first because a successful skip may post a fresh notice for the *following*
-     * occurrence, which cancelling afterwards would wipe instead.
-     */
+    /** A successful skip may post a notice for the *next* occurrence, which a late cancel wipes. */
     @Test
     fun skipAction_clearsTheNotificationBeforeTheSkipRuns() {
         UpcomingAlarmNotifier.post(context, listOf(1, 2), TRIGGER_MILLIS)

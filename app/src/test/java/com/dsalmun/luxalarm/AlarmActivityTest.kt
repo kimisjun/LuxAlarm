@@ -46,11 +46,8 @@ import org.robolectric.shadows.ShadowSensor
 import org.robolectric.shadows.ShadowSensorManager
 
 /**
- * Unlike `AlarmRingingScreenTest`, which hands the composable float values, this drives the real
- * activity — the only proof that the light sensor reaches the screen and unlocks the button.
- *
- * The rule order matters: `onCreate` reads `AppContainer.settingsManager`, and the activity
- * registers its listener on resume, so a sensor added afterwards is never seen.
+ * Drives the real activity, the only proof the light sensor reaches the screen. Rule order matters:
+ * the listener is registered on resume, so a sensor added afterwards is never seen.
  */
 @RunWith(AndroidJUnit4::class)
 class AlarmActivityTest {
@@ -125,9 +122,7 @@ class AlarmActivityTest {
         composeRule.onNodeWithText("Need More Light").assertIsNotEnabled()
     }
 
-    /**
-     * `onSensorChanged` is public, so the type guard is all that keeps proximity from unlocking.
-     */
+    /** `onSensorChanged` is public, so the type guard is all that keeps proximity out. */
     @Test
     fun aReadingFromAnotherSensor_isIgnored() {
         sendLightReading(BRIGHT)

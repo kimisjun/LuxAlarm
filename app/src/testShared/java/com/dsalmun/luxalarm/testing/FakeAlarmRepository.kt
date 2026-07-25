@@ -21,11 +21,7 @@ import com.dsalmun.luxalarm.data.IAlarmRepository
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/**
- * In-memory [IAlarmRepository] recording what the code under test asked for. [setShouldSucceed]
- * drives every permission-gated call at once, mirroring how the real repository reverts a write
- * when exact alarms are denied.
- */
+/** In-memory [IAlarmRepository]. [setShouldSucceed] drives every permission-gated call at once. */
 class FakeAlarmRepository : IAlarmRepository {
     private val alarmsFlow = MutableStateFlow<List<AlarmItem>>(emptyList())
     private var shouldSucceed = true

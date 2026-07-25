@@ -36,10 +36,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * The row packs a 48sp clock next to a switch, so the largest accessibility font scale is the
- * realistic way for a control to get pushed out of reach.
- */
+/** A 48sp clock beside a switch: the largest font scale pushes a control out of reach. */
 @RunWith(AndroidJUnit4::class)
 class AlarmScreenLayoutTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()

@@ -25,7 +25,11 @@ import androidx.core.content.edit
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.UpcomingAlarmNotifier
+import com.dsalmun.luxalarm.testing.pinLocalHourTo
+import com.dsalmun.luxalarm.testing.restoreSystemTimeZone
 import java.util.Calendar
+import java.util.TimeZone
+import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -42,16 +46,20 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlarmManager
 
 /**
- * Robolectric's AlarmManager lets the exact-alarm permission be flipped at will — the trigger for
- * every revert path below. Runs on a plain [Application]: `AppContainer.onCreate` would build a
- * second repository and reschedule on a background thread, racing these assertions.
+ * Runs on a plain [Application]: `AppContainer.onCreate` would build a second repository and
+ * reschedule on a background thread, racing these assertions.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class AlarmRepositoryTest {
     private companion object {
         const val THIRTY_MINUTES = 30 * 60 * 1000L
+        const val ONE_HOUR = 60 * 60 * 1000L
         const val THREE_HOURS = 3 * 60 * 60 * 1000L
+
+        /** Far enough from midnight that shifting the zone cannot move the date. */
+        const val MIDDAY = 12
+
         val EVERY_DAY = setOf(1, 2, 3, 4, 5, 6, 7)
     }
 
@@ -80,6 +88,8 @@ class AlarmRepositoryTest {
         database.close()
         UpcomingAlarmNotifier.cancel(context)
         ShadowAlarmManager.setCanScheduleExactAlarms(true)
+        // Process-wide, so a shifted zone would leak into every test that follows.
+        restoreSystemTimeZone()
     }
 
     @Test
@@ -254,8 +264,7 @@ class AlarmRepositoryTest {
         val result = runBlocking { repository.scheduleNextAlarm() }
 
         assertFalse(result)
-        // The show alarm is inexact, so losing the exact-alarm permission would otherwise leave it
-        // armed to post a notice for an alarm that can no longer ring.
+        // Inexact, so it outlives the revocation and would announce an alarm that cannot ring.
         assertNull(scheduledShowAlarm(), "The pending show alarm must be cancelled too")
     }
 
@@ -273,6 +282,87 @@ class AlarmRepositoryTest {
         assertNull(upcomingNotification())
         assertNull(scheduledShowAlarm())
     }
+
+    @Test
+    fun scheduleNextAlarm_afterATimeZoneChange_rearmsAtTheSameWallClockTime() {
+        pinLocalHourTo(MIDDAY)
+        val (hour, minute) = clockTimeIn(THREE_HOURS)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+        val armedBefore = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+
+        shiftZoneBy(-1)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        val armedAfter = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+        assertEquals(
+            hour to minute,
+            localTimeOf(armedAfter),
+            "The alarm must still ring at the wall-clock time the user set",
+        )
+        // One hour west pushes that wall-clock time one hour later in absolute terms.
+        assertEquals(armedBefore + ONE_HOUR, armedAfter, "The armed instant has to move")
+    }
+
+    @Test
+    fun scheduleNextAlarm_afterATimeZoneChange_reAnchorsTheUpcomingNotification() {
+        pinLocalHourTo(MIDDAY)
+        val (hour, minute) = clockTimeIn(THREE_HOURS)
+        insertAlarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+        assertNull(upcomingNotification(), "Precondition: three hours out is outside the window")
+        assertNotNull(scheduledShowAlarm(), "Precondition: the show alarm is armed instead")
+
+        // Two hours east: the same wall-clock time is only an hour away now.
+        shiftZoneBy(2)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        assertNotNull(upcomingNotification(), "The alarm is inside the window now, so notify")
+    }
+
+    /** The skip is stored as a local day, not an instant, precisely so this survives. */
+    @Test
+    fun scheduleNextAlarm_afterATimeZoneChange_stillHonoursASkippedOccurrence() {
+        pinLocalHourTo(MIDDAY)
+        val (hour, minute) = clockTimeIn(THREE_HOURS)
+        val skippedDay =
+            localDayOf(nextTrigger(hour, minute, EVERY_DAY, System.currentTimeMillis()))
+        insertAlarm(
+            id = 1,
+            hour = hour,
+            minute = minute,
+            repeatDays = EVERY_DAY,
+            skippedOccurrenceDay = skippedDay,
+        )
+
+        shiftZoneBy(-1)
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        val armed = assertNotNull(scheduledAlarmClock()?.triggerAtMs)
+        assertEquals(
+            skippedDay + 1,
+            localDayOf(armed),
+            "The skipped day must still be passed over in the new zone",
+        )
+        assertEquals(hour to minute, localTimeOf(armed))
+    }
+
+    /** Positive is east. The id must stay a GMT offset — `localDayOf` resolves it via `ZoneId`. */
+    private fun shiftZoneBy(hours: Int) {
+        val minutes = (TimeZone.getDefault().rawOffset + hours * ONE_HOUR.toInt()) / 60_000
+        val sign = if (minutes < 0) "-" else "+"
+        val magnitude = abs(minutes)
+        TimeZone.setDefault(
+            TimeZone.getTimeZone("GMT$sign%02d:%02d".format(magnitude / 60, magnitude % 60))
+        )
+    }
+
+    private fun localTimeOf(millis: Long): Pair<Int, Int> =
+        Calendar.getInstance()
+            .apply { timeInMillis = millis }
+            .let {
+                it[Calendar.HOUR_OF_DAY] to it[Calendar.MINUTE]
+            }
 
     private fun clockTimeIn(offsetMillis: Long): Pair<Int, Int> {
         val calendar =

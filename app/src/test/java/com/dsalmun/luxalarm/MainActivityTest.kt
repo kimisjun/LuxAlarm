@@ -19,6 +19,7 @@ package com.dsalmun.luxalarm
 import android.Manifest
 import android.app.Application
 import android.content.Intent
+import android.os.Looper
 import android.provider.Settings
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
@@ -39,7 +40,6 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 
 /**
- * Beyond hosting the UI, [MainActivity] asks for permissions and recovers when reopened mid-alarm.
  * `isAlarmRinging` is persisted but [AlarmService] is not, so a killed process leaves the flag set
  * with no service behind it — and every future alarm blocked.
  */
@@ -155,9 +155,39 @@ class MainActivityTest {
         assertNull(startedIntentFor(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
     }
 
-    /**
-     * Robolectric reports the permission as unheld, so only the "ask for it" branch is reachable.
-     */
+    @Test
+    fun whenTheUserReturnsHavingGrantedExactAlarms_alarmsAreRearmed() {
+        val activity = openExactAlarmSettings()
+        repository.setShouldSucceed(true)
+
+        activity.onExactAlarmPermissionResult()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(1, repository.scheduleNextAlarmCallCount)
+    }
+
+    @Test
+    fun whenTheUserReturnsStillDenied_nothingIsRearmed() {
+        val activity = openExactAlarmSettings()
+
+        activity.onExactAlarmPermissionResult()
+        shadowOf(Looper.getMainLooper()).idle()
+
+        assertEquals(0, repository.scheduleNextAlarmCallCount, "Nothing can be armed yet")
+    }
+
+    /** Denied on launch, so `onCreate` sends the user to the setting they return from. */
+    private fun openExactAlarmSettings(): MainActivity {
+        repository.setShouldSucceed(false)
+        val activity = create()
+        assertNotNull(
+            startedIntentFor(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM),
+            "Precondition: the user was sent to the exact-alarm setting",
+        )
+        return activity
+    }
+
+    /** Robolectric reports the permission as unheld, so only the "ask" branch is reachable. */
     @Test
     fun withoutFullScreenIntentPermission_theSystemSettingIsOpened() {
         create()
@@ -180,10 +210,12 @@ class MainActivityTest {
     private fun startAndSettle(): MainActivity {
         val activity = create()
         controller?.start()
-        while (nextStartedActivity() != null) {
-            // drain
-        }
+        drainStartedActivities()
         return activity
+    }
+
+    private fun drainStartedActivities() {
+        while (nextStartedActivity() != null) {}
     }
 
     private fun resume() {
@@ -192,9 +224,7 @@ class MainActivityTest {
 
     private fun nextStartedActivity(): Intent? = shadowOf(application).nextStartedActivity
 
-    /**
-     * `onCreate` may open more than one settings screen, so match on the action, not on a count.
-     */
+    /** `onCreate` may open more than one settings screen, so match on the action. */
     private fun startedIntentFor(action: String): Intent? =
         generateSequence { nextStartedActivity() }.firstOrNull { it.action == action }
 }

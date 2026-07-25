@@ -33,10 +33,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Against a real [SettingsManager], so the slider-to-storage round trip is covered rather than
- * mocked. The sensor reading is supplied directly; a shadow sensor would just report 0.
- */
+/** Against a real [SettingsManager], so the slider-to-storage round trip is covered, not mocked. */
 @RunWith(AndroidJUnit4::class)
 class SettingsScreenTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()

@@ -41,7 +41,6 @@ val WEEKDAYS =
         Calendar.FRIDAY,
     )
 
-/** Wall-clock hour/minute [offsetMillis] from now, without pinning the clock. */
 fun clockTimeIn(offsetMillis: Long): Pair<Int, Int> {
     val calendar =
         Calendar.getInstance().apply { timeInMillis = System.currentTimeMillis() + offsetMillis }
@@ -52,9 +51,8 @@ fun clockTimeIn(offsetMillis: Long): Pair<Int, Int> {
 private val systemTimeZone: TimeZone = TimeZone.getDefault()
 
 /**
- * Shifts the default time zone so that "now" reads as [hour] locally. Robolectric has no supported
- * way to set an absolute wall-clock time under the paused looper, and moving the zone under a fixed
- * instant has the same effect. Pair with [restoreSystemTimeZone]: the zone is process-wide.
+ * Shifts the default zone so "now" reads as [hour] locally — Robolectric cannot set an absolute
+ * wall-clock time under the paused looper. Pair with [restoreSystemTimeZone]: the zone is global.
  */
 fun pinLocalHourTo(hour: Int) {
     val utcHour = Calendar.getInstance(TimeZone.getTimeZone("UTC"))[Calendar.HOUR_OF_DAY]

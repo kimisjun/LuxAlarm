@@ -36,12 +36,8 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 /**
- * The receiver claims the ringing flag and starts [AlarmService], then — behind `goAsync` — retires
- * the one-shot alarms that fired and schedules the next one.
- *
- * Extras are read with raw string keys, so the intents here mirror the ones
- * `AlarmRepository.scheduleNextAlarm` writes: a key that drifts on one side alone falls back to the
- * default and rings at full volume with no vibration.
+ * Extras are read with raw string keys, so these intents mirror what
+ * `AlarmRepository.scheduleNextAlarm` writes: a key drifting on one side alone silently defaults.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
@@ -75,10 +71,7 @@ class AlarmReceiverTest {
         assertFalse(started.getBooleanExtra("vibration_enabled", true))
     }
 
-    /**
-     * The flag is all that keeps two alarms set for the same minute from starting two services. The
-     * receiver still has to reschedule, or the second alarm of the pair kills the chain.
-     */
+    /** The receiver still has to reschedule, or the second alarm of the pair kills the chain. */
     @Test
     fun whenAnAlarmIsAlreadyRinging_noSecondServiceIsStarted() {
         assertTrue(repository.setRingingAlarm(), "Precondition: the first claim succeeds")

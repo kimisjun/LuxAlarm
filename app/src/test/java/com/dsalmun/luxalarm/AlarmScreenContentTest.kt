@@ -38,10 +38,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/**
- * Driving [AlarmScreenContent] directly keeps these away from [AlarmViewModel]'s 30-second ticker
- * and from [android.media.RingtoneManager], neither of which this UI logic depends on.
- */
+/** Driven directly, away from [AlarmViewModel]'s ticker and [android.media.RingtoneManager]. */
 @RunWith(AndroidJUnit4::class)
 class AlarmScreenContentTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()

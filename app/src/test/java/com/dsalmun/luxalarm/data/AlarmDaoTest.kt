@@ -36,7 +36,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
-/** [AlarmDao] against a real in-memory SQLite database. */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class AlarmDaoTest {
@@ -58,10 +57,7 @@ class AlarmDaoTest {
         database.close()
     }
 
-    /**
-     * The query matches `repeatDays = ''`, coupling it to [Converters]. If that serialisation
-     * changes, repeating alarms start being switched off after they ring.
-     */
+    /** Matching `repeatDays = ''` couples this to [Converters]: a change switches off repeats. */
     @Test
     fun deactivateOneShotAlarms_onlyDeactivatesNonRepeating() = runBlocking {
         dao.insert(alarm(id = 1, hour = 7, minute = 0, repeatDays = emptySet()))

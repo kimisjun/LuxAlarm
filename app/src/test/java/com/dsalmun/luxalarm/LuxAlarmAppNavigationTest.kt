@@ -31,9 +31,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Not covered here: a *system* back press. In activity-compose 1.13 `BackHandler` runs over
- * `NavigationEventDispatcher`, which `onBackPressedDispatcher` no longer reaches under Robolectric.
- * The back arrow drives the same state transition; the gesture itself needs an instrumented test.
+ * A *system* back press is not covered: `BackHandler` runs over `NavigationEventDispatcher`, which
+ * `onBackPressedDispatcher` no longer reaches under Robolectric. The gesture needs instrumentation.
  */
 @RunWith(AndroidJUnit4::class)
 class LuxAlarmAppNavigationTest {

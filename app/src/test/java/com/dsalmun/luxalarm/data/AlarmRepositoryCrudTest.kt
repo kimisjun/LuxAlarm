@@ -41,10 +41,8 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowAlarmManager
 
 /**
- * The write half of [AlarmRepository]; the skip and scheduling paths live in [AlarmRepositoryTest].
- *
- * What matters here is the revert: every mutating call writes and then reschedules, and a withdrawn
- * exact-alarm permission has to roll the write back rather than show an alarm that can never ring.
+ * The write half of [AlarmRepository]; skip and scheduling live in [AlarmRepositoryTest]. Every
+ * mutating call reschedules, and a withdrawn permission has to roll the write back.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
@@ -238,8 +236,7 @@ class AlarmRepositoryCrudTest {
         assertEquals(emptyList(), dao.getAllAlarmIds())
     }
 
-    // Sound and haptics deliberately do not revert on a scheduling failure: they change how an
-    // alarm rings, not whether it is armed.
+    // Sound and haptics change how an alarm rings, not whether it is armed, so they do not revert.
 
     @Test
     fun setAlarmRingtone_storesAndClearsTheUri() = runBlocking {

@@ -115,7 +115,6 @@ class AlarmViewModelTest {
         assertEquals(1, fakeRepository.toggleAlarmCallCount)
     }
 
-    /** Turning an alarm off has nothing to confirm, so the success path stays silent. */
     @Test
     fun toggleAlarm_whenTurningOff_emitsNothing() = runTest {
         fakeRepository.setShouldSucceed(true)

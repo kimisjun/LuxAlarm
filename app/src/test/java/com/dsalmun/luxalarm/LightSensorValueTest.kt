@@ -38,10 +38,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowSensor
 import org.robolectric.shadows.ShadowSensorManager
 
-/**
- * `SettingsScreenTest` hands the screen a fixed float, so nothing else drives the real sensor
- * plumbing: the type guard, the missing-sensor case, and the lifecycle-tied registration.
- */
+/** The real sensor plumbing: the type guard, the missing sensor, and the tied registration. */
 @RunWith(AndroidJUnit4::class)
 class LightSensorValueTest {
     private companion object {
@@ -148,9 +145,7 @@ class LightSensorValueTest {
         assertReadingIs(BRIGHT)
     }
 
-    /**
-     * The activity stays resumed, so `onDispose` runs alone and the ON_PAUSE observer never does.
-     */
+    /** The activity stays resumed, so `onDispose` runs alone and ON_PAUSE never does. */
     @Test
     fun whenTheComposableLeavesTheTree_theListenerIsReleased() {
         addLightSensor()
