@@ -17,12 +17,10 @@
 package com.dsalmun.luxalarm
 
 import com.dsalmun.luxalarm.data.AlarmItem
-import com.dsalmun.luxalarm.data.IAlarmRepository
+import com.dsalmun.luxalarm.testing.FakeAlarmRepository
 import kotlin.test.assertEquals
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -98,6 +96,45 @@ class AlarmViewModelTest {
     }
 
     @Test
+    fun toggleAlarm_emitsEventOnPermissionError() = runTest {
+        fakeRepository.setShouldSucceed(false)
+
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.events.collect { collectedEvents.add(it) }
+            }
+
+        viewModel.toggleAlarm(alarmId = 1, isActive = true)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(AlarmViewModel.Event.ShowPermissionError, collectedEvents[0])
+
+        job.cancel()
+        assertEquals(1, fakeRepository.toggleAlarmCallCount)
+    }
+
+    /** Turning an alarm off has nothing to confirm, so the success path stays silent. */
+    @Test
+    fun toggleAlarm_whenTurningOff_emitsNothing() = runTest {
+        fakeRepository.setShouldSucceed(true)
+
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.events.collect { collectedEvents.add(it) }
+            }
+
+        viewModel.toggleAlarm(alarmId = 1, isActive = false)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(emptyList(), collectedEvents)
+
+        job.cancel()
+    }
+
+    @Test
     fun deleteAlarm_callsRepository() = runTest {
         val alarmId = 1
         viewModel.deleteAlarm(alarmId)
@@ -115,6 +152,26 @@ class AlarmViewModelTest {
         viewModel.updateAlarmTime(alarmId, hour, minute)
         testDispatcher.scheduler.advanceUntilIdle()
 
+        assertEquals(1, fakeRepository.updateAlarmTimeCallCount)
+    }
+
+    @Test
+    fun updateAlarmTime_emitsEventOnPermissionError() = runTest {
+        fakeRepository.setShouldSucceed(false)
+
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.events.collect { collectedEvents.add(it) }
+            }
+
+        viewModel.updateAlarmTime(alarmId = 1, hour = 10, minute = 30)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(AlarmViewModel.Event.ShowPermissionError, collectedEvents[0])
+
+        job.cancel()
         assertEquals(1, fakeRepository.updateAlarmTimeCallCount)
     }
 
@@ -155,6 +212,31 @@ class AlarmViewModelTest {
     }
 
     @Test
+    fun setAlarmVolume_callsRepository() = runTest {
+        val alarmId = 1
+
+        viewModel.setAlarmVolume(alarmId, 0.25f)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, fakeRepository.setAlarmVolumeCallCount)
+        assertEquals(alarmId, fakeRepository.lastVolumeAlarmId)
+        assertEquals(0.25f, fakeRepository.lastVolume)
+    }
+
+    /** Null is the "follow the system alarm volume" sentinel, so it has to reach the repository. */
+    @Test
+    fun setAlarmVolume_withNull_callsRepositoryWithNull() = runTest {
+        val alarmId = 2
+
+        viewModel.setAlarmVolume(alarmId, null)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, fakeRepository.setAlarmVolumeCallCount)
+        assertEquals(alarmId, fakeRepository.lastVolumeAlarmId)
+        assertEquals(null, fakeRepository.lastVolume)
+    }
+
+    @Test
     fun setAlarmVibration_callsRepository() = runTest {
         val alarmId = 1
 
@@ -167,95 +249,144 @@ class AlarmViewModelTest {
     }
 
     @Test
-    fun alarms_stateFlowCollectsFromRepository() = runTest {
+    fun skipNext_callsRepositoryWithAlarmId() = runTest {
+        val alarm = AlarmItem(id = 7, hour = 8, minute = 0, repeatDays = setOf(2, 3, 4, 5, 6))
+
+        viewModel.skipNext(alarm)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, fakeRepository.skipAlarmsCallCount)
+        assertEquals(listOf(7), fakeRepository.lastSkipIds)
+    }
+
+    @Test
+    fun skipNext_emitsEventOnPermissionError() = runTest {
+        val alarm = AlarmItem(id = 7, hour = 8, minute = 0, repeatDays = setOf(2, 3, 4, 5, 6))
+        fakeRepository.setShouldSucceed(false)
+
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.events.collect { collectedEvents.add(it) }
+            }
+
+        viewModel.skipNext(alarm)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(AlarmViewModel.Event.ShowPermissionError, collectedEvents[0])
+
+        job.cancel()
+        assertEquals(1, fakeRepository.skipAlarmsCallCount)
+    }
+
+    @Test
+    fun cancelSkip_callsRepository() = runTest {
+        viewModel.cancelSkip(7)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, fakeRepository.cancelSkipCallCount)
+        assertEquals(7, fakeRepository.lastCancelSkipAlarmId)
+    }
+
+    @Test
+    fun cancelSkip_emitsEventOnPermissionError() = runTest {
+        fakeRepository.setShouldSucceed(false)
+
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                viewModel.events.collect { collectedEvents.add(it) }
+            }
+
+        viewModel.cancelSkip(7)
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(AlarmViewModel.Event.ShowPermissionError, collectedEvents[0])
+
+        job.cancel()
+        assertEquals(1, fakeRepository.cancelSkipCallCount)
+    }
+
+    @Test
+    fun alarmUiStates_stateFlowCollectsFromRepository() = runTest {
         val fakeAlarms = listOf(AlarmItem(id = 1, hour = 8, minute = 0))
         val newViewModel = AlarmViewModel(fakeRepository)
 
-        val job = launch(UnconfinedTestDispatcher(testScheduler)) { newViewModel.alarms.collect {} }
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                newViewModel.alarmUiStates.collect {}
+            }
+        // runCurrent, not advanceUntilIdle: the endless ticker in alarmUiStates never goes idle.
+        testDispatcher.scheduler.runCurrent()
 
         fakeRepository.emit(fakeAlarms)
-        testDispatcher.scheduler.advanceUntilIdle()
+        testDispatcher.scheduler.runCurrent()
 
-        assertEquals(fakeAlarms, newViewModel.alarms.value)
+        assertEquals(fakeAlarms, newViewModel.alarmUiStates.value.map { it.alarm })
 
         job.cancel()
     }
-}
 
-class FakeAlarmRepository : IAlarmRepository {
-    private val alarmsFlow = MutableStateFlow<List<AlarmItem>>(emptyList())
-    private var shouldSucceed = true
+    @Test
+    fun updateAlarmTime_toastEventCarriesRepeatDaysFromCachedState() = runTest {
+        val repeatDays = setOf(2, 4, 6)
+        val newViewModel = AlarmViewModel(fakeRepository)
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
 
-    var addAlarmCallCount = 0
-    var toggleAlarmCallCount = 0
-    var deleteAlarmCallCount = 0
-    var updateAlarmTimeCallCount = 0
-    var setRepeatDaysCallCount = 0
-    var setAlarmRingtoneCallCount = 0
-    var lastRingtoneAlarmId: Int? = null
-    var lastRingtoneUri: String? = null
-    var setAlarmVibrationCallCount = 0
-    var lastVibrationAlarmId: Int? = null
-    var lastVibrationEnabled: Boolean? = null
+        val stateJob =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                newViewModel.alarmUiStates.collect {}
+            }
+        val eventJob =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                newViewModel.events.collect { collectedEvents.add(it) }
+            }
+        fakeRepository.emit(
+            listOf(AlarmItem(id = 1, hour = 8, minute = 0, repeatDays = repeatDays))
+        )
+        testDispatcher.scheduler.runCurrent()
 
-    fun setShouldSucceed(succeed: Boolean) {
-        shouldSucceed = succeed
+        newViewModel.updateAlarmTime(1, 9, 30)
+        testDispatcher.scheduler.runCurrent()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(
+            AlarmViewModel.Event.ShowAlarmSetMessage(9, 30, repeatDays),
+            collectedEvents[0],
+        )
+
+        eventJob.cancel()
+        stateJob.cancel()
     }
 
-    suspend fun emit(alarms: List<AlarmItem>) {
-        alarmsFlow.emit(alarms)
+    @Test
+    fun toggleAlarmOn_emitsToastEventFromCachedState() = runTest {
+        val newViewModel = AlarmViewModel(fakeRepository)
+        val collectedEvents = mutableListOf<AlarmViewModel.Event>()
+
+        val stateJob =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                newViewModel.alarmUiStates.collect {}
+            }
+        val eventJob =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                newViewModel.events.collect { collectedEvents.add(it) }
+            }
+        fakeRepository.emit(listOf(AlarmItem(id = 1, hour = 8, minute = 0)))
+        testDispatcher.scheduler.runCurrent()
+
+        newViewModel.toggleAlarm(1, true)
+        testDispatcher.scheduler.runCurrent()
+
+        assertEquals(1, collectedEvents.size)
+        assertEquals(
+            AlarmViewModel.Event.ShowAlarmSetMessage(8, 0, emptySet()),
+            collectedEvents[0],
+        )
+
+        eventJob.cancel()
+        stateJob.cancel()
     }
-
-    override fun getAllAlarms(): Flow<List<AlarmItem>> = alarmsFlow
-
-    override suspend fun addAlarm(hour: Int, minute: Int): Boolean {
-        addAlarmCallCount++
-        return shouldSucceed
-    }
-
-    override suspend fun toggleAlarm(alarmId: Int, isActive: Boolean): Boolean {
-        toggleAlarmCallCount++
-        return shouldSucceed
-    }
-
-    override suspend fun updateAlarmTime(alarmId: Int, hour: Int, minute: Int): Boolean {
-        updateAlarmTimeCallCount++
-        return shouldSucceed
-    }
-
-    override suspend fun deleteAlarm(alarmId: Int) {
-        deleteAlarmCallCount++
-    }
-
-    override suspend fun setRepeatDays(alarmId: Int, repeatDays: Set<Int>) {
-        setRepeatDaysCallCount++
-    }
-
-    override suspend fun setAlarmRingtone(alarmId: Int, ringtoneUri: String?) {
-        setAlarmRingtoneCallCount++
-        lastRingtoneAlarmId = alarmId
-        lastRingtoneUri = ringtoneUri
-    }
-
-    override suspend fun setAlarmVolume(alarmId: Int, volume: Float?) {}
-
-    override suspend fun setAlarmVibration(alarmId: Int, enabled: Boolean) {
-        setAlarmVibrationCallCount++
-        lastVibrationAlarmId = alarmId
-        lastVibrationEnabled = enabled
-    }
-
-    override suspend fun scheduleNextAlarm(): Boolean = shouldSucceed
-
-    override fun canScheduleExactAlarms(): Boolean = true
-
-    override fun isAlarmRinging(): Boolean = false
-
-    override fun setRingingAlarm(): Boolean = true
-
-    override fun clearRingingAlarm() {}
-
-    override suspend fun deactivateOneShotAlarms(ids: List<Int>) {}
-
-    override suspend fun cancelV1Alarms() {}
 }

@@ -1,0 +1,166 @@
+/*
+ * This file is part of Lux Alarm, authored by Daniel Salmun.
+ *
+ * Lux Alarm is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Lux Alarm is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Lux Alarm.  If not, see <https://www.gnu.org/licenses/>.
+ */
+package com.dsalmun.luxalarm
+
+import android.app.Application
+import android.app.Notification
+import android.app.NotificationManager
+import android.content.Context
+import android.content.Intent
+import android.os.Looper
+import androidx.test.core.app.ApplicationProvider
+import com.dsalmun.luxalarm.testing.AppContainerTestRule
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import org.junit.After
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+
+/**
+ * Dismiss clears the notification *before* the skip runs, so a skip that fails has to put it back —
+ * otherwise the alarm is silently un-skipped with nothing on screen to say so.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
+class UpcomingAlarmReceiverTest {
+    private companion object {
+        const val TRIGGER_MILLIS = 1_700_000_000_000L
+    }
+
+    @get:Rule val appContainer = AppContainerTestRule()
+
+    private lateinit var context: Context
+
+    private val repository
+        get() = appContainer.repository
+
+    @Before
+    fun setup() {
+        context = ApplicationProvider.getApplicationContext()
+    }
+
+    @After
+    fun tearDown() {
+        UpcomingAlarmNotifier.cancel(context)
+    }
+
+    @Test
+    fun showAction_postsTheUpcomingNotification() {
+        UpcomingAlarmReceiver().onReceive(context, intentFor(UpcomingAlarmReceiver.ACTION_SHOW))
+
+        assertNotNull(upcomingNotification(), "ACTION_SHOW should post the upcoming notice")
+    }
+
+    /** The receiver is exported, so an intent carrying neither action can arrive. */
+    @Test
+    fun anUnrecognisedAction_isIgnored() {
+        UpcomingAlarmReceiver().onReceive(context, intentFor("com.dsalmun.luxalarm.NOT_AN_ACTION"))
+        runSkipToCompletion()
+
+        assertNull(upcomingNotification())
+        assertEquals(0, repository.skipAlarmsCallCount)
+    }
+
+    /** A null intent reaches the extras reads before the `when`, so the defaults have to hold. */
+    @Test
+    fun aNullIntent_isIgnored() {
+        UpcomingAlarmReceiver().onReceive(context, null)
+        runSkipToCompletion()
+
+        assertNull(upcomingNotification())
+        assertEquals(0, repository.skipAlarmsCallCount)
+    }
+
+    @Test
+    fun skipAction_forwardsIdsAndTriggerToTheRepository() {
+        sendSkipBroadcast()
+        runSkipToCompletion()
+
+        assertEquals(1, repository.skipAlarmsCallCount)
+        assertEquals(listOf(1, 2), repository.lastSkipIds)
+        assertEquals(TRIGGER_MILLIS, repository.lastSkipTriggerMillis)
+    }
+
+    /**
+     * Cancel comes first because a successful skip may post a fresh notice for the *following*
+     * occurrence, which cancelling afterwards would wipe instead.
+     */
+    @Test
+    fun skipAction_clearsTheNotificationBeforeTheSkipRuns() {
+        UpcomingAlarmNotifier.post(context, listOf(1, 2), TRIGGER_MILLIS)
+        assertNotNull(upcomingNotification(), "Precondition: the notice is showing")
+
+        sendSkipBroadcast()
+
+        assertNull(upcomingNotification(), "The notice is cleared before the skip is attempted")
+        assertEquals(0, repository.skipAlarmsCallCount, "The skip has not run yet")
+    }
+
+    @Test
+    fun skipAction_whenSkipSucceeds_leavesTheNotificationCleared() {
+        repository.setShouldSucceed(true)
+        UpcomingAlarmNotifier.post(context, listOf(1, 2), TRIGGER_MILLIS)
+        assertNotNull(upcomingNotification(), "Precondition: the notice is showing")
+
+        sendSkipBroadcast()
+        runSkipToCompletion()
+
+        assertEquals(1, repository.skipAlarmsCallCount)
+        // Rescheduling owns the notification from here on; the receiver must not re-post it.
+        assertNull(upcomingNotification())
+    }
+
+    @Test
+    fun skipAction_whenSkipFails_restoresTheNotification() {
+        repository.setShouldSucceed(false)
+        UpcomingAlarmNotifier.post(context, listOf(1, 2), TRIGGER_MILLIS)
+        assertNotNull(upcomingNotification(), "Precondition: the notice is showing")
+
+        sendSkipBroadcast()
+        runSkipToCompletion()
+
+        assertEquals(1, repository.skipAlarmsCallCount)
+        assertNotNull(upcomingNotification(), "A reverted skip must put the notice back")
+    }
+
+    private fun intentFor(action: String): Intent =
+        Intent(context, UpcomingAlarmReceiver::class.java).apply {
+            this.action = action
+            putIntegerArrayListExtra(UpcomingAlarmReceiver.EXTRA_ALARM_IDS, arrayListOf(1, 2))
+            putExtra(UpcomingAlarmReceiver.EXTRA_TRIGGER_MILLIS, TRIGGER_MILLIS)
+        }
+
+    /** Dispatched through the framework: `goAsync` needs the pending result it installs. */
+    private fun sendSkipBroadcast() {
+        context.sendBroadcast(intentFor(UpcomingAlarmReceiver.ACTION_SKIP))
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    private fun runSkipToCompletion() {
+        appContainer.scheduler.advanceUntilIdle()
+    }
+
+    private fun upcomingNotification(): Notification? =
+        shadowOf(context.getSystemService(NotificationManager::class.java))
+            .getNotification(UpcomingAlarmNotifier.NOTIFICATION_ID)
+}
