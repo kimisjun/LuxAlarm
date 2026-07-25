@@ -25,7 +25,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -50,17 +51,26 @@ import androidx.core.content.IntentCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsalmun.luxalarm.data.AlarmItem
+import com.dsalmun.luxalarm.data.nextTrigger
 import java.util.Calendar
 import kotlinx.coroutines.flow.collectLatest
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+/**
+ * The alarm list, wired to its [AlarmViewModel]. [ringtoneNameFor] is a seam: resolving a title
+ * goes through [RingtoneManager] and the content resolver, so tests substitute a fixed name.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlarmScreen(
     onSettingsClick: () -> Unit = {},
     alarmViewModel: AlarmViewModel = viewModel(factory = AlarmViewModelFactory()),
+    ringtoneNameFor: @Composable (String?) -> String = { uri ->
+        val context = LocalContext.current
+        remember(uri) { getRingtoneDisplayName(context, uri) }
+    },
 ) {
     val context = LocalContext.current
-    val alarms by alarmViewModel.alarms.collectAsState()
+    val alarmStates by alarmViewModel.alarmUiStates.collectAsState()
     var showTimePickerDialog by remember { mutableStateOf(false) }
     var alarmToEdit by remember { mutableStateOf<AlarmItem?>(null) }
     var expandedAlarmId by remember { mutableStateOf<Int?>(null) }
@@ -118,15 +128,112 @@ fun AlarmScreen(
             )
         }
 
+    AlarmScreenContent(
+        alarmStates = alarmStates,
+        expandedAlarmId = expandedAlarmId,
+        ringtoneNameFor = ringtoneNameFor,
+        onSettingsClick = onSettingsClick,
+        onAddClick = {
+            alarmToEdit = null
+            showTimePickerDialog = true
+        },
+        onAlarmClick = { alarm ->
+            expandedAlarmId = if (expandedAlarmId == alarm.id) null else alarm.id
+        },
+        onTimeClick = { alarm ->
+            alarmToEdit = alarm
+            showTimePickerDialog = true
+        },
+        onToggle = { alarm, isActive -> alarmViewModel.toggleAlarm(alarm.id, isActive) },
+        onSkip = { alarm -> alarmViewModel.skipNext(alarm) },
+        onCancelSkip = { alarm -> alarmViewModel.cancelSkip(alarm.id) },
+        onRepeatDaysChange = { alarm, newDays ->
+            alarmViewModel.setRepeatDays(alarm.id, newDays)
+        },
+        onVolumeChange = { alarm, newVolume -> alarmViewModel.setAlarmVolume(alarm.id, newVolume) },
+        onVibrationToggle = { alarm, enabled ->
+            alarmViewModel.setAlarmVibration(alarm.id, enabled)
+        },
+        onDeleteClick = { alarm -> alarmToDelete = alarm },
+        onRingtoneClick = { alarm ->
+            if (alarmIdForRingtonePicker == null) {
+                alarmIdForRingtonePicker = alarm.id
+                ringtonePickerLauncher.launch(ringtonePickerIntent(alarm))
+            }
+        },
+    )
+
+    if (showTimePickerDialog) {
+        TimePickerDialog(
+            onConfirm = {
+                if (alarmToEdit != null) {
+                    alarmViewModel.updateAlarmTime(
+                        alarmToEdit!!.id,
+                        timePickerState.hour,
+                        timePickerState.minute,
+                    )
+                } else {
+                    alarmViewModel.addAlarm(timePickerState.hour, timePickerState.minute)
+                }
+                showTimePickerDialog = false
+                alarmToEdit = null
+            },
+            onDismiss = {
+                showTimePickerDialog = false
+                alarmToEdit = null
+            },
+            timePickerState = timePickerState,
+        )
+    }
+
+    alarmToDelete?.let { alarm ->
+        DeleteAlarmDialog(
+            alarm = alarm,
+            onConfirm = {
+                alarmViewModel.deleteAlarm(alarm.id)
+                alarmToDelete = null
+            },
+            onDismiss = { alarmToDelete = null },
+        )
+    }
+}
+
+private fun ringtonePickerIntent(alarm: AlarmItem): Intent {
+    val defaultUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+    val existingUri = alarm.ringtoneUri?.toUri() ?: defaultUri
+    return Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, defaultUri)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_EXISTING_URI, existingUri)
+        putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "Select ringtone")
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AlarmScreenContent(
+    alarmStates: List<AlarmViewModel.AlarmUiState>,
+    expandedAlarmId: Int?,
+    ringtoneNameFor: @Composable (String?) -> String,
+    onSettingsClick: () -> Unit,
+    onAddClick: () -> Unit,
+    onAlarmClick: (AlarmItem) -> Unit,
+    onTimeClick: (AlarmItem) -> Unit,
+    onToggle: (AlarmItem, Boolean) -> Unit,
+    onSkip: (AlarmItem) -> Unit,
+    onCancelSkip: (AlarmItem) -> Unit,
+    onRepeatDaysChange: (AlarmItem, Set<Int>) -> Unit,
+    onVolumeChange: (AlarmItem, Float) -> Unit,
+    onVibrationToggle: (AlarmItem, Boolean) -> Unit,
+    onDeleteClick: (AlarmItem) -> Unit,
+    onRingtoneClick: (AlarmItem) -> Unit,
+) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = {
-                    alarmToEdit = null // Ensure we're in "add" mode
-                    showTimePickerDialog = true
-                }
-            ) {
+            FloatingActionButton(onClick = onAddClick) {
                 Icon(
                     painter = painterResource(R.drawable.add_24px),
                     contentDescription = "Add Alarm",
@@ -152,7 +259,7 @@ fun AlarmScreen(
             )
         },
     ) { innerPadding ->
-        if (alarms.isEmpty()) {
+        if (alarmStates.isEmpty()) {
             Box(
                 modifier = Modifier.padding(innerPadding).fillMaxSize(),
                 contentAlignment = Alignment.Center,
@@ -168,119 +275,62 @@ fun AlarmScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(alarms, key = { it.id }) { alarm ->
+                items(alarmStates, key = { it.alarm.id }) { state ->
+                    val alarm = state.alarm
                     AlarmRow(
                         alarm = alarm,
-                        ringtoneDisplayName =
-                            remember(alarm.ringtoneUri) {
-                                getRingtoneDisplayName(context, alarm.ringtoneUri)
-                            },
+                        isUpcoming = state.isUpcoming,
+                        isSkippingNext = state.isSkippingNext,
+                        onSkip = { onSkip(alarm) },
+                        onCancelSkip = { onCancelSkip(alarm) },
+                        ringtoneDisplayName = ringtoneNameFor(alarm.ringtoneUri),
                         expanded = expandedAlarmId == alarm.id,
-                        onToggle = { isActive -> alarmViewModel.toggleAlarm(alarm.id, isActive) },
-                        onClick = {
-                            expandedAlarmId = if (expandedAlarmId == alarm.id) null else alarm.id
-                        },
-                        onTimeClick = {
-                            alarmToEdit = alarm
-                            showTimePickerDialog = true
-                        },
-                        onRepeatDaysChange = { newDays ->
-                            alarmViewModel.setRepeatDays(alarm.id, newDays)
-                        },
-                        onDelete = { alarmToDelete = alarm },
-                        onVolumeChange = { newVolume ->
-                            alarmViewModel.setAlarmVolume(alarm.id, newVolume)
-                        },
-                        onVibrationToggle = { enabled ->
-                            alarmViewModel.setAlarmVibration(alarm.id, enabled)
-                        },
-                        onRingtoneClick = {
-                            if (alarmIdForRingtonePicker != null) return@AlarmRow
-                            alarmIdForRingtonePicker = alarm.id
-                            val defaultUri =
-                                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                            val existingUri = alarm.ringtoneUri?.toUri() ?: defaultUri
-                            val pickerIntent =
-                                Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-                                    putExtra(
-                                        RingtoneManager.EXTRA_RINGTONE_TYPE,
-                                        RingtoneManager.TYPE_ALARM,
-                                    )
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-                                    putExtra(RingtoneManager.EXTRA_RINGTONE_DEFAULT_URI, defaultUri)
-                                    putExtra(
-                                        RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                                        existingUri,
-                                    )
-                                    putExtra(
-                                        RingtoneManager.EXTRA_RINGTONE_TITLE,
-                                        "Select ringtone",
-                                    )
-                                }
-                            ringtonePickerLauncher.launch(pickerIntent)
-                        },
+                        onToggle = { isActive -> onToggle(alarm, isActive) },
+                        onClick = { onAlarmClick(alarm) },
+                        onTimeClick = { onTimeClick(alarm) },
+                        onRepeatDaysChange = { newDays -> onRepeatDaysChange(alarm, newDays) },
+                        onDelete = { onDeleteClick(alarm) },
+                        onVolumeChange = { newVolume -> onVolumeChange(alarm, newVolume) },
+                        onVibrationToggle = { enabled -> onVibrationToggle(alarm, enabled) },
+                        onRingtoneClick = { onRingtoneClick(alarm) },
                     )
                 }
             }
         }
     }
+}
 
-    if (showTimePickerDialog) {
-        TimePickerDialog(
-            onConfirm = {
-                if (alarmToEdit != null) {
-                    alarmViewModel.updateAlarmTime(
-                        alarmToEdit!!.id,
-                        timePickerState.hour,
-                        timePickerState.minute,
-                    )
-                } else {
-                    alarmViewModel.addAlarm(timePickerState.hour, timePickerState.minute)
-                }
-                showTimePickerDialog = false
-                alarmToEdit = null
-            },
-            onDismiss = {
-                showTimePickerDialog = false
-                alarmToEdit = null
-            },
-            timePickerState = timePickerState,
-        )
-    }
-
-    if (alarmToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { alarmToDelete = null },
-            title = { Text("Delete alarm") },
-            text = {
-                Text(
-                    String.format(
-                        LocalLocale.current.platformLocale,
-                        "Delete the %02d:%02d alarm?",
-                        alarmToDelete!!.hour,
-                        alarmToDelete!!.minute,
-                    )
+@Composable
+fun DeleteAlarmDialog(alarm: AlarmItem, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Delete alarm") },
+        text = {
+            Text(
+                String.format(
+                    LocalLocale.current.platformLocale,
+                    "Delete the %02d:%02d alarm?",
+                    alarm.hour,
+                    alarm.minute,
                 )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        alarmViewModel.deleteAlarm(alarmToDelete!!.id)
-                        alarmToDelete = null
-                    }
-                ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = { TextButton(onClick = { alarmToDelete = null }) { Text("Cancel") } },
-        )
-    }
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("Delete", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 @Composable
 fun AlarmRow(
     alarm: AlarmItem,
+    isUpcoming: Boolean,
+    isSkippingNext: Boolean,
+    onSkip: () -> Unit,
+    onCancelSkip: () -> Unit,
     ringtoneDisplayName: String,
     expanded: Boolean,
     onToggle: (Boolean) -> Unit,
@@ -321,7 +371,11 @@ fun AlarmRow(
                                 ),
                             contentDescription = if (expanded) "Collapse" else "Expand",
                         )
-                        Switch(checked = alarm.isActive, onCheckedChange = onToggle)
+                        Switch(
+                            checked = alarm.isActive,
+                            onCheckedChange = onToggle,
+                            modifier = Modifier.semantics { contentDescription = "Alarm enabled" },
+                        )
                     }
                 }
             }
@@ -331,6 +385,24 @@ fun AlarmRow(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+
+            if (isSkippingNext) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "Skipping next alarm",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = onCancelSkip, contentPadding = PaddingValues(0.dp)) {
+                        Text("Undo")
+                    }
+                }
+            } else if (isUpcoming) {
+                TextButton(onClick = onSkip, contentPadding = PaddingValues(0.dp)) {
+                    Text("Dismiss")
+                }
+            }
 
             if (expanded) {
                 Spacer(modifier = Modifier.height(16.dp))
@@ -393,6 +465,7 @@ fun AlarmRow(
                     Checkbox(
                         checked = alarm.vibrationEnabled,
                         onCheckedChange = { onVibrationToggle(it) },
+                        modifier = Modifier.semantics { contentDescription = "Vibration enabled" },
                     )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
@@ -523,15 +596,11 @@ fun TimePickerDialog(
     )
 }
 
-private fun showSetAlarmToast(
-    context: Context,
-    hour: Int,
-    minute: Int,
-    repeatDays: Set<Int> = emptySet(),
-) {
-    val scheduledTimeMillis = calculateNextTrigger(hour, minute, repeatDays)
-
+private fun showSetAlarmToast(context: Context, hour: Int, minute: Int, repeatDays: Set<Int>) {
     val now = Calendar.getInstance()
+    val scheduledTimeMillis = nextTrigger(hour, minute, repeatDays, now.timeInMillis)
+
+    // nextTrigger always returns an instant after `now`, so at least one part below applies.
     val diffMillis = scheduledTimeMillis - now.timeInMillis
     val totalMinutes = kotlin.math.ceil(diffMillis / (1000.0 * 60)).toInt()
     val days = totalMinutes / (60 * 24)
@@ -548,67 +617,7 @@ private fun showSetAlarmToast(
     if (minutes > 0) {
         timeParts.add("$minutes ${if (minutes == 1) "minute" else "minutes"}")
     }
-    if (timeParts.isEmpty()) {
-        timeParts.add("less than a minute")
-    }
 
     val toastMessage = "Alarm set for ${timeParts.joinToString(", ")} from now."
     Toast.makeText(context, toastMessage, Toast.LENGTH_SHORT).show()
-}
-
-private fun calculateNextTrigger(hour: Int, minute: Int, repeatDays: Set<Int>): Long {
-    val now = Calendar.getInstance()
-    val alarmTime =
-        Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-
-    if (repeatDays.isEmpty()) {
-        if (alarmTime.before(now)) {
-            alarmTime.add(Calendar.DAY_OF_MONTH, 1) // schedule for next day if time has passed
-        }
-        return alarmTime.timeInMillis
-    }
-
-    // Find the next valid trigger time
-    for (i in 0 until 7) {
-        val potentialNextDay = Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, i) }
-        val dayOfWeek = potentialNextDay[Calendar.DAY_OF_WEEK]
-
-        if (dayOfWeek in repeatDays) {
-            val triggerTime =
-                Calendar.getInstance().apply {
-                    time = potentialNextDay.time
-                    set(Calendar.HOUR_OF_DAY, hour)
-                    set(Calendar.MINUTE, minute)
-                    set(Calendar.SECOND, 0)
-                    set(Calendar.MILLISECOND, 0)
-                }
-            if (triggerTime.after(now)) {
-                return triggerTime.timeInMillis
-            }
-        }
-    }
-
-    // If no time was found, it means the next alarm is next week. Find the first day of the week.
-    var firstDayOfWeek = 8
-    for (day in repeatDays) {
-        if (day < firstDayOfWeek) {
-            firstDayOfWeek = day
-        }
-    }
-
-    val nextWeekAlarm =
-        Calendar.getInstance().apply {
-            add(Calendar.WEEK_OF_YEAR, 1)
-            set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
-            set(Calendar.HOUR_OF_DAY, hour)
-            set(Calendar.MINUTE, minute)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-    return nextWeekAlarm.timeInMillis
 }

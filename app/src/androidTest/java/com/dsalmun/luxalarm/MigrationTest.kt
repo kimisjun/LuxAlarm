@@ -25,6 +25,7 @@ import androidx.test.filters.MediumTest
 import com.dsalmun.luxalarm.data.AlarmDatabase
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_1_2
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_2_3
+import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_3_4
 import com.dsalmun.luxalarm.data.AlarmItem
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -131,9 +132,57 @@ class MigrationTest {
         db.close()
     }
 
+    private data class V3Alarm(
+        val id: Int,
+        val hour: Int,
+        val minute: Int,
+        val isActive: Boolean,
+        val repeatDays: String,
+        val ringtoneUri: String?,
+        val volume: Float?,
+        val vibrationEnabled: Boolean,
+    )
+
+    private fun createV3Database(alarms: List<V3Alarm>) {
+        val dbPath = context.getDatabasePath(dbName)
+        dbPath.parentFile?.mkdirs()
+        val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `alarms` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `hour` INTEGER NOT NULL,
+                `minute` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                `repeatDays` TEXT NOT NULL,
+                `ringtoneUri` TEXT,
+                `volume` REAL,
+                `vibrationEnabled` INTEGER NOT NULL
+            )
+            """
+                .trimIndent()
+        )
+        for (alarm in alarms) {
+            val values =
+                ContentValues().apply {
+                    put("id", alarm.id)
+                    put("hour", alarm.hour)
+                    put("minute", alarm.minute)
+                    put("isActive", if (alarm.isActive) 1 else 0)
+                    put("repeatDays", alarm.repeatDays)
+                    put("ringtoneUri", alarm.ringtoneUri)
+                    put("volume", alarm.volume)
+                    put("vibrationEnabled", if (alarm.vibrationEnabled) 1 else 0)
+                }
+            db.insert("alarms", null, values)
+        }
+        db.version = 3
+        db.close()
+    }
+
     private fun openV3Database(): AlarmDatabase =
         Room.databaseBuilder(context, AlarmDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
             .allowMainThreadQueries()
             .build()
 
@@ -310,6 +359,75 @@ class MigrationTest {
             assertEquals(8, newAlarm.hour)
             assertEquals(15, newAlarm.minute)
             assertEquals(false, newAlarm.vibrationEnabled)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun migrate3To4_addsSkippedOccurrenceDayColumn() {
+        val v3Alarms =
+            listOf(
+                V3Alarm(
+                    id = 1,
+                    hour = 7,
+                    minute = 30,
+                    isActive = true,
+                    repeatDays = "1,2,3,4,5",
+                    ringtoneUri = "content://media/ringtone",
+                    volume = 0.5f,
+                    vibrationEnabled = true,
+                )
+            )
+        createV3Database(v3Alarms)
+
+        val db = openV3Database()
+        try {
+            val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
+            assertEquals(1, alarms.size)
+
+            val alarm1 = alarms.first { it.id == 1 }
+            assertEquals(7, alarm1.hour)
+            assertEquals(30, alarm1.minute)
+            assertEquals(0.5f, alarm1.volume)
+            assertNull(alarm1.skippedOccurrenceDay)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun migrate3To4_newRowsCanHaveSkippedOccurrenceDay() {
+        val v3Alarms =
+            listOf(
+                V3Alarm(
+                    id = 1,
+                    hour = 6,
+                    minute = 0,
+                    isActive = true,
+                    repeatDays = "",
+                    ringtoneUri = null,
+                    volume = null,
+                    vibrationEnabled = true,
+                )
+            )
+        createV3Database(v3Alarms)
+
+        val db = openV3Database()
+        try {
+            val dao = db.alarmDao()
+            runBlocking {
+                dao.insert(AlarmItem(hour = 8, minute = 15, skippedOccurrenceDay = 123456789L))
+            }
+
+            val alarms = runBlocking { dao.getAllAlarms().first() }
+            assertEquals(2, alarms.size)
+
+            val migrated = alarms.first { it.id == 1 }
+            assertNull(migrated.skippedOccurrenceDay)
+
+            val newAlarm = alarms.first { it.id != 1 }
+            assertEquals(123456789L, newAlarm.skippedOccurrenceDay)
         } finally {
             db.close()
         }

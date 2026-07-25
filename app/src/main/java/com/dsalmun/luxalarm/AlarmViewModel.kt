@@ -21,17 +21,36 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.dsalmun.luxalarm.data.AlarmItem
 import com.dsalmun.luxalarm.data.IAlarmRepository
+import com.dsalmun.luxalarm.data.UPCOMING_LEAD_MILLIS
+import com.dsalmun.luxalarm.data.localDayOf
+import com.dsalmun.luxalarm.data.nextTrigger
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
-    val alarms: StateFlow<List<AlarmItem>> =
-        repository
-            .getAllAlarms()
+    private companion object {
+        const val TICK_INTERVAL_MILLIS = 30_000L
+    }
+
+    // The alarm Flow only re-emits on DB changes, so tick to keep upcoming/skipping state live.
+    private val ticker = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(TICK_INTERVAL_MILLIS)
+        }
+    }
+
+    val alarmUiStates: StateFlow<List<AlarmUiState>> =
+        combine(repository.getAllAlarms(), ticker) { alarms, now ->
+                alarms.map { alarm -> alarm.toUiState(now) }
+            }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
@@ -40,6 +59,10 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
 
     private val _events = MutableSharedFlow<Event>()
     val events = _events.asSharedFlow()
+
+    /** Reads [alarmUiStates] rather than the DAO: the screen subscribes to it, so it is warm. */
+    private fun findAlarm(alarmId: Int): AlarmItem? =
+        alarmUiStates.value.find { it.alarm.id == alarmId }?.alarm
 
     fun addAlarm(hour: Int, minute: Int) {
         viewModelScope.launch {
@@ -55,7 +78,7 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
         viewModelScope.launch {
             if (repository.toggleAlarm(alarmId, isActive)) {
                 if (isActive) {
-                    val alarm = alarms.value.find { it.id == alarmId }
+                    val alarm = findAlarm(alarmId)
                     if (alarm != null) {
                         _events.emit(
                             Event.ShowAlarmSetMessage(alarm.hour, alarm.minute, alarm.repeatDays)
@@ -71,7 +94,7 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
     fun updateAlarmTime(alarmId: Int, hour: Int, minute: Int) {
         viewModelScope.launch {
             if (repository.updateAlarmTime(alarmId, hour, minute)) {
-                val alarm = alarms.value.find { it.id == alarmId }
+                val alarm = findAlarm(alarmId)
                 _events.emit(
                     Event.ShowAlarmSetMessage(hour, minute, alarm?.repeatDays ?: emptySet())
                 )
@@ -100,6 +123,40 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
     fun setAlarmVibration(alarmId: Int, enabled: Boolean) {
         viewModelScope.launch { repository.setAlarmVibration(alarmId, enabled) }
     }
+
+    /** Backs the inline "Dismiss" on a card inside the upcoming window. */
+    fun skipNext(alarm: AlarmItem) {
+        val rawNext =
+            nextTrigger(alarm.hour, alarm.minute, alarm.repeatDays, System.currentTimeMillis())
+        viewModelScope.launch {
+            if (!repository.skipAlarms(listOf(alarm.id), rawNext)) {
+                _events.emit(Event.ShowPermissionError)
+            }
+        }
+    }
+
+    fun cancelSkip(alarmId: Int) {
+        viewModelScope.launch {
+            if (!repository.cancelSkip(alarmId)) {
+                _events.emit(Event.ShowPermissionError)
+            }
+        }
+    }
+
+    private fun AlarmItem.toUiState(now: Long): AlarmUiState {
+        val rawNext = nextTrigger(hour, minute, repeatDays, now)
+        // Mirror the scheduler: it only honours a skip on the raw next occurrence's day, so an
+        // expired skip must not be shown as skipping — the row would claim a still-ringing alarm.
+        val isSkippingNext = skippedOccurrenceDay == localDayOf(rawNext)
+        val isUpcoming = isActive && !isSkippingNext && (rawNext - now) in 0..UPCOMING_LEAD_MILLIS
+        return AlarmUiState(alarm = this, isUpcoming = isUpcoming, isSkippingNext = isSkippingNext)
+    }
+
+    data class AlarmUiState(
+        val alarm: AlarmItem,
+        val isUpcoming: Boolean,
+        val isSkippingNext: Boolean,
+    )
 
     sealed class Event {
         data class ShowAlarmSetMessage(val hour: Int, val minute: Int, val repeatDays: Set<Int>) :

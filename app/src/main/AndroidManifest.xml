@@ -38,6 +38,9 @@
             android:name=".AlarmReceiver"
             android:exported="false" />
         <receiver
+            android:name=".UpcomingAlarmReceiver"
+            android:exported="false" />
+        <receiver
             android:name=".BootReceiver"
             android:exported="true">
             <intent-filter>

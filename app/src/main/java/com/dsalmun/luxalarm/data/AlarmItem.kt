@@ -31,4 +31,7 @@ data class AlarmItem(
     val ringtoneUri: String? = null,
     val volume: Float? = null,
     val vibrationEnabled: Boolean = true,
+    // Local day of a single skipped occurrence of a repeating alarm; see localDayOf. Self-expiring:
+    // once the day is past it can never match again, so nothing has to clean it up.
+    val skippedOccurrenceDay: Long? = null,
 )

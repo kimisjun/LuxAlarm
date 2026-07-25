@@ -37,6 +37,10 @@ interface IAlarmRepository {
 
     suspend fun setAlarmVibration(alarmId: Int, enabled: Boolean)
 
+    suspend fun skipAlarms(ids: List<Int>, triggerMillis: Long): Boolean
+
+    suspend fun cancelSkip(alarmId: Int): Boolean
+
     suspend fun scheduleNextAlarm(): Boolean
 
     fun canScheduleExactAlarms(): Boolean

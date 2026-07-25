@@ -24,7 +24,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [AlarmItem::class], version = 3, exportSchema = false)
+@Database(entities = [AlarmItem::class], version = 4, exportSchema = false)
 @TypeConverters(Converters::class)
 abstract class AlarmDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
@@ -48,11 +48,18 @@ abstract class AlarmDatabase : RoomDatabase() {
                 }
             }
 
+        internal val MIGRATION_3_4 =
+            object : Migration(3, 4) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL("ALTER TABLE alarms ADD COLUMN skippedOccurrenceDay INTEGER")
+                }
+            }
+
         fun getDatabase(context: Context): AlarmDatabase {
             return Instance
                 ?: synchronized(this) {
                     Room.databaseBuilder(context, AlarmDatabase::class.java, "alarm_database")
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                         .build()
                         .also { Instance = it }
                 }

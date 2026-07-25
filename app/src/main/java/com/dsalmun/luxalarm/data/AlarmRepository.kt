@@ -24,13 +24,15 @@ import android.os.Build
 import androidx.core.content.edit
 import com.dsalmun.luxalarm.AlarmReceiver
 import com.dsalmun.luxalarm.MainActivity
-import java.util.Calendar
+import com.dsalmun.luxalarm.UpcomingAlarmNotifier
+import com.dsalmun.luxalarm.UpcomingAlarmReceiver
 import kotlinx.coroutines.flow.Flow
 
 class AlarmRepository(private val alarmDao: AlarmDao, private val context: Context) :
     IAlarmRepository {
     private companion object {
         const val NEXT_ALARM_REQUEST_CODE = 0
+        const val UPCOMING_SHOW_REQUEST_CODE = 1
         const val PREFS_NAME = "alarm_state"
         const val KEY_IS_RINGING = "is_ringing"
         const val KEY_V1_MIGRATED = "v1_migrated"
@@ -57,7 +59,6 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         alarmDao.update(updatedAlarm)
 
         if (!scheduleNextAlarm()) {
-            // Permission denied - revert the change and signal failure
             alarmDao.update(alarm)
             return false
         }
@@ -66,11 +67,12 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
 
     override suspend fun updateAlarmTime(alarmId: Int, hour: Int, minute: Int): Boolean {
         val alarm = alarmDao.getAlarmById(alarmId) ?: return true
-        val updatedAlarm = alarm.copy(hour = hour, minute = minute, isActive = true)
+        // Editing the alarm invalidates any pending skip (matches Google Clock).
+        val updatedAlarm =
+            alarm.copy(hour = hour, minute = minute, isActive = true, skippedOccurrenceDay = null)
         alarmDao.update(updatedAlarm)
 
         if (!scheduleNextAlarm()) {
-            // Permission denied - revert the change and signal failure
             alarmDao.update(alarm)
             return false
         }
@@ -86,16 +88,54 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
 
     override suspend fun setRepeatDays(alarmId: Int, repeatDays: Set<Int>) {
         val alarm = alarmDao.getAlarmById(alarmId) ?: return
-        val updatedAlarm = alarm.copy(repeatDays = repeatDays)
+        // Editing the schedule invalidates any pending skip (matches Google Clock).
+        val updatedAlarm = alarm.copy(repeatDays = repeatDays, skippedOccurrenceDay = null)
         alarmDao.update(updatedAlarm)
         scheduleNextAlarm()
+    }
+
+    override suspend fun skipAlarms(ids: List<Int>, triggerMillis: Long): Boolean {
+        // The caller names the occurrence by the instant it was armed for. Resolve it to a local
+        // day here, in the current zone, so the stored skip survives a later time-zone change.
+        val skipDay = localDayOf(triggerMillis)
+        val originals = mutableListOf<AlarmItem>()
+        for (id in ids) {
+            val alarm = alarmDao.getAlarmById(id) ?: continue
+            val updated =
+                if (alarm.repeatDays.isEmpty()) {
+                    // One-shot: Google Clock's Dismiss turns the alarm off entirely.
+                    alarm.copy(isActive = false)
+                } else {
+                    alarm.copy(skippedOccurrenceDay = skipDay)
+                }
+            originals.add(alarm)
+            alarmDao.update(updated)
+        }
+
+        if (!scheduleNextAlarm()) {
+            originals.forEach { alarmDao.update(it) }
+            return false
+        }
+        return true
+    }
+
+    override suspend fun cancelSkip(alarmId: Int): Boolean {
+        val alarm = alarmDao.getAlarmById(alarmId) ?: return true
+        if (alarm.skippedOccurrenceDay == null) return true
+        alarmDao.update(alarm.copy(skippedOccurrenceDay = null))
+
+        if (!scheduleNextAlarm()) {
+            alarmDao.update(alarm)
+            return false
+        }
+        return true
     }
 
     override suspend fun setAlarmRingtone(alarmId: Int, ringtoneUri: String?) {
         val alarm = alarmDao.getAlarmById(alarmId) ?: return
         val updatedAlarm = alarm.copy(ringtoneUri = ringtoneUri)
         alarmDao.update(updatedAlarm)
-        // Reschedule: ringtone URI is embedded in the PendingIntent extras
+        // Ringtone, volume and vibration ride in the PendingIntent extras, so re-arm on a change.
         scheduleNextAlarm()
     }
 
@@ -103,7 +143,6 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         val alarm = alarmDao.getAlarmById(alarmId) ?: return
         val updatedAlarm = alarm.copy(volume = volume?.coerceIn(0f, 1f))
         alarmDao.update(updatedAlarm)
-        // Reschedule: volume is embedded in the PendingIntent extras
         scheduleNextAlarm()
     }
 
@@ -111,7 +150,6 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         val alarm = alarmDao.getAlarmById(alarmId) ?: return
         val updatedAlarm = alarm.copy(vibrationEnabled = enabled)
         alarmDao.update(updatedAlarm)
-        // Reschedule: vibration setting is embedded in the PendingIntent extras
         scheduleNextAlarm()
     }
 
@@ -124,11 +162,22 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         }
 
         if (!canScheduleExactAlarms()) {
+            // Nothing can be armed, so an "upcoming alarm" notice would be a lie. The pending show
+            // alarm is inexact, so it outlives the revocation and has to go too.
+            cancelUpcomingNotification()
             return false
         }
 
+        val now = System.currentTimeMillis()
         val alarmTriggers = activeAlarms.map { alarm ->
-            alarm to calculateNextTrigger(alarm.hour, alarm.minute, alarm.repeatDays)
+            alarm to
+                nextTrigger(
+                    alarm.hour,
+                    alarm.minute,
+                    alarm.repeatDays,
+                    now,
+                    alarm.skippedOccurrenceDay,
+                )
         }
 
         val minTriggerTime = alarmTriggers.minOf { it.second }
@@ -166,7 +215,60 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
             AlarmManager.AlarmClockInfo(minTriggerTime, showIntent),
             pendingIntent,
         )
+
+        scheduleUpcomingNotification(alarmIds, minTriggerTime, now)
         return true
+    }
+
+    /**
+     * Posts the "upcoming alarm" notification, or arms it for later. Inexact and allow-while-idle:
+     * a 2h-ahead notice needs no precise timing, and this needs no exact-alarm permission.
+     */
+    private fun scheduleUpcomingNotification(
+        alarmIds: List<Int>,
+        triggerMillis: Long,
+        now: Long,
+    ) {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        val notifyAt = triggerMillis - UPCOMING_LEAD_MILLIS
+        // FLAG_UPDATE_CURRENT never returns null.
+        val showPendingIntent = upcomingShowPendingIntent(alarmIds, triggerMillis)!!
+        if (notifyAt <= now) {
+            alarmManager.cancel(showPendingIntent)
+            UpcomingAlarmNotifier.post(context, alarmIds, triggerMillis)
+        } else {
+            UpcomingAlarmNotifier.cancel(context)
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, notifyAt, showPendingIntent)
+        }
+    }
+
+    private fun upcomingShowPendingIntent(
+        alarmIds: List<Int>,
+        triggerMillis: Long,
+        flags: Int = PendingIntent.FLAG_UPDATE_CURRENT,
+    ): PendingIntent? {
+        val intent =
+            Intent(context, UpcomingAlarmReceiver::class.java).apply {
+                action = UpcomingAlarmReceiver.ACTION_SHOW
+                putIntegerArrayListExtra(UpcomingAlarmReceiver.EXTRA_ALARM_IDS, ArrayList(alarmIds))
+                putExtra(UpcomingAlarmReceiver.EXTRA_TRIGGER_MILLIS, triggerMillis)
+            }
+        return PendingIntent.getBroadcast(
+            context,
+            UPCOMING_SHOW_REQUEST_CODE,
+            intent,
+            flags or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    private fun cancelUpcomingNotification() {
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        // FLAG_NO_CREATE: only an already-armed show alarm needs cancelling, and this avoids
+        // registering a PendingIntent just to throw it away.
+        upcomingShowPendingIntent(emptyList(), 0L, PendingIntent.FLAG_NO_CREATE)?.let {
+            alarmManager.cancel(it)
+        }
+        UpcomingAlarmNotifier.cancel(context)
     }
 
     override fun isAlarmRinging(): Boolean = prefs.getBoolean(KEY_IS_RINGING, false)
@@ -222,60 +324,6 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
         alarmManager.cancel(pendingIntent)
-    }
-
-    private fun calculateNextTrigger(hour: Int, minute: Int, repeatDays: Set<Int>): Long {
-        val now = Calendar.getInstance()
-        val alarmTime =
-            Calendar.getInstance().apply {
-                set(Calendar.HOUR_OF_DAY, hour)
-                set(Calendar.MINUTE, minute)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-
-        if (repeatDays.isEmpty()) {
-            if (alarmTime.before(now)) {
-                alarmTime.add(Calendar.DAY_OF_MONTH, 1)
-            }
-            return alarmTime.timeInMillis
-        }
-
-        for (i in 0 until 7) {
-            val potentialNextDay = Calendar.getInstance().apply { add(Calendar.DAY_OF_MONTH, i) }
-            val dayOfWeek = potentialNextDay[Calendar.DAY_OF_WEEK]
-
-            if (dayOfWeek in repeatDays) {
-                val triggerTime =
-                    Calendar.getInstance().apply {
-                        time = potentialNextDay.time
-                        set(Calendar.HOUR_OF_DAY, hour)
-                        set(Calendar.MINUTE, minute)
-                        set(Calendar.SECOND, 0)
-                        set(Calendar.MILLISECOND, 0)
-                    }
-                if (triggerTime.after(now)) {
-                    return triggerTime.timeInMillis
-                }
-            }
-        }
-
-        var firstDayOfWeek = 8
-        for (day in repeatDays) {
-            if (day < firstDayOfWeek) {
-                firstDayOfWeek = day
-            }
-        }
-
-        val nextWeekAlarm =
-            Calendar.getInstance().apply {
-                add(Calendar.WEEK_OF_YEAR, 1)
-                set(Calendar.DAY_OF_WEEK, firstDayOfWeek)
-                set(Calendar.HOUR_OF_DAY, hour)
-                set(Calendar.MINUTE, minute)
-                set(Calendar.SECOND, 0)
-                set(Calendar.MILLISECOND, 0)
-            }
-        return nextWeekAlarm.timeInMillis
+        cancelUpcomingNotification()
     }
 }
