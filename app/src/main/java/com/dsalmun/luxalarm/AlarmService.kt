@@ -42,6 +42,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
 
@@ -59,10 +60,10 @@ class AlarmService : Service() {
 
     companion object {
         const val ACTION_STOP_ALARM = "com.dsalmun.luxalarm.STOP_ALARM"
-        private const val ALARM_CHANNEL_ID = "alarm_channel_id"
+        internal const val ALARM_CHANNEL_ID = "alarm_channel_id"
         const val ALARM_NOTIFICATION_ID = 1001
         var isRunning = false
-            private set
+            @VisibleForTesting internal set
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -89,11 +90,15 @@ class AlarmService : Service() {
     private fun startAlarm(
         alarmId: Int,
         ringtoneUri: String?,
-        volume: Float? = null,
-        vibrationEnabled: Boolean = true,
+        volume: Float?,
+        vibrationEnabled: Boolean,
     ) {
         isRunning = true
-        try {
+        val audioAttrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
+
+        // Notification, ringtone and vibration are started independently so they also fail
+        // independently: whatever survives is all that stands between the user and a missed alarm.
+        independently {
             createNotificationChannel()
             val notification = buildAlarmNotification(alarmId)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -105,58 +110,64 @@ class AlarmService : Service() {
             } else {
                 startForeground(ALARM_NOTIFICATION_ID, notification)
             }
+        }
+        independently { startRingtone(ringtoneUri, volume, audioAttrs) }
+        if (vibrationEnabled) {
+            independently { startVibration(audioAttrs) }
+        }
+    }
 
-            val audioAttrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
-
-            // Request audio focus to prevent system from stopping/ducking our alarm
-            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            audioFocusRequest =
-                AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
-                    .setAudioAttributes(audioAttrs)
-                    .build()
-            audioManager?.requestAudioFocus(audioFocusRequest!!)
-
-            // Start playing alarm sound
-            val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            val selectedAlarmUri = ringtoneUri?.toUri()
-            mediaPlayer =
-                createPlayerForUri(selectedAlarmUri, audioAttrs, volume)
-                    ?: createPlayerForUri(defaultAlarmUri, audioAttrs, volume)
-                    ?: throw IllegalStateException("Failed to create MediaPlayer for alarm audio")
-
-            // Start vibration
-            if (vibrationEnabled) {
-                vibrator =
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val vibratorManager =
-                            getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                        vibratorManager.defaultVibrator
-                    } else {
-                        @Suppress("DEPRECATION")
-                        getSystemService(VIBRATOR_SERVICE) as Vibrator
-                    }
-
-                val vibrationPattern = longArrayOf(0, 1000, 500, 1000, 500)
-                val vibrationEffect = VibrationEffect.createWaveform(vibrationPattern, 0)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val vibrationAttrs =
-                        VibrationAttributes.Builder()
-                            .setUsage(VibrationAttributes.USAGE_ALARM)
-                            .build()
-                    vibrator?.vibrate(vibrationEffect, vibrationAttrs)
-                } else {
-                    @Suppress("DEPRECATION") vibrator?.vibrate(vibrationEffect, audioAttrs)
-                }
-            }
+    /** Runs one alarm signal, swallowing a failure so the others still get their turn. */
+    private fun independently(startSignal: () -> Unit) {
+        try {
+            startSignal()
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun startRingtone(ringtoneUri: String?, volume: Float?, audioAttrs: AudioAttributes) {
+        // Audio focus keeps the system from ducking or stopping the alarm.
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioFocusRequest =
+            AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(audioAttrs)
+                .build()
+        audioManager?.requestAudioFocus(audioFocusRequest!!)
+
+        val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+        val selectedAlarmUri = ringtoneUri?.toUri()
+        mediaPlayer =
+            createPlayerForUri(selectedAlarmUri, audioAttrs, volume)
+                ?: createPlayerForUri(defaultAlarmUri, audioAttrs, volume)
+                ?: throw IllegalStateException("Failed to create MediaPlayer for alarm audio")
+    }
+
+    /** [audioAttrs] is only read on pre-Tiramisu devices. */
+    private fun startVibration(audioAttrs: AudioAttributes) {
+        vibrator =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vibratorManager = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
+                vibratorManager.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION") getSystemService(VIBRATOR_SERVICE) as Vibrator
+            }
+
+        val vibrationPattern = longArrayOf(0, 1000, 500, 1000, 500)
+        val vibrationEffect = VibrationEffect.createWaveform(vibrationPattern, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val vibrationAttrs =
+                VibrationAttributes.Builder().setUsage(VibrationAttributes.USAGE_ALARM).build()
+            vibrator?.vibrate(vibrationEffect, vibrationAttrs)
+        } else {
+            @Suppress("DEPRECATION") vibrator?.vibrate(vibrationEffect, audioAttrs)
         }
     }
 
     private fun createPlayerForUri(
         uri: Uri?,
         audioAttrs: AudioAttributes,
-        volume: Float? = null,
+        volume: Float?,
     ): MediaPlayer? {
         if (uri == null) return null
         var player: MediaPlayer? = null
