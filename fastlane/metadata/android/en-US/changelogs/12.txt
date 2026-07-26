@@ -1,0 +1,5 @@
+- Added a silent notification two hours before the next alarm, with an action to skip that one occurrence
+- Added the same "Skip next" action to upcoming alarms in the list, with an undo once skipped
+- Alarm rows now show a countdown, and where a skipped alarm lands instead
+- Fixed alarms not rescheduling after a time zone change, a clock change or an app update
+- Fixed vibration being skipped when the ringtone failed to start
