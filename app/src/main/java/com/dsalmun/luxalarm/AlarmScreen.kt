@@ -24,6 +24,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -45,14 +46,18 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.IntentCompat
 import androidx.core.net.toUri
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.dsalmun.luxalarm.data.AlarmItem
+import com.dsalmun.luxalarm.data.localDayOf
 import com.dsalmun.luxalarm.data.nextTrigger
+import java.time.LocalDate
 import java.util.Calendar
+import kotlin.math.ceil
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -278,9 +283,7 @@ fun AlarmScreenContent(
                 items(alarmStates, key = { it.alarm.id }) { state ->
                     val alarm = state.alarm
                     AlarmRow(
-                        alarm = alarm,
-                        isUpcoming = state.isUpcoming,
-                        isSkippingNext = state.isSkippingNext,
+                        state = state,
                         onSkip = { onSkip(alarm) },
                         onCancelSkip = { onCancelSkip(alarm) },
                         ringtoneDisplayName = ringtoneNameFor(alarm.ringtoneUri),
@@ -326,9 +329,7 @@ fun DeleteAlarmDialog(alarm: AlarmItem, onConfirm: () -> Unit, onDismiss: () -> 
 
 @Composable
 fun AlarmRow(
-    alarm: AlarmItem,
-    isUpcoming: Boolean,
-    isSkippingNext: Boolean,
+    state: AlarmViewModel.AlarmUiState,
     onSkip: () -> Unit,
     onCancelSkip: () -> Unit,
     ringtoneDisplayName: String,
@@ -342,6 +343,7 @@ fun AlarmRow(
     onVolumeChange: (Float) -> Unit,
     onVibrationToggle: (Boolean) -> Unit,
 ) {
+    val alarm = state.alarm
     Card(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -359,6 +361,11 @@ fun AlarmRow(
                         ),
                     fontSize = 48.sp,
                     fontWeight = FontWeight.Bold,
+                    textDecoration = if (state.isSkippingNext) TextDecoration.LineThrough else null,
+                    color =
+                        if (state.isSkippingNext)
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        else Color.Unspecified,
                     modifier = Modifier.clickable(onClick = onTimeClick),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -380,27 +387,43 @@ fun AlarmRow(
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = formatRepeatDays(alarm.repeatDays, alarm.hour, alarm.minute),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            if (isSkippingNext) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "Skipping next alarm",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    TextButton(onClick = onCancelSkip, contentPadding = PaddingValues(0.dp)) {
-                        Text("Undo")
-                    }
+            // Status and action share one row, so the card keeps its height as the ticker flips.
+            val action =
+                when {
+                    state.isSkippingNext -> RowAction.UNDO
+                    // Skipping a one-shot only turns it off, which the switch above already does.
+                    state.isUpcoming && alarm.repeatDays.isNotEmpty() -> RowAction.SKIP
+                    else -> RowAction.NONE
                 }
-            } else if (isUpcoming) {
-                TextButton(onClick = onSkip, contentPadding = PaddingValues(0.dp)) {
-                    Text("Dismiss")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text =
+                        when {
+                            state.isSkippingNext ->
+                                formatSkipStatus(
+                                    state.skippedTriggerMillis,
+                                    state.nextTriggerMillis,
+                                    state.nowMillis,
+                                )
+                            state.isUpcoming ->
+                                formatCountdown(state.nextTriggerMillis - state.nowMillis)
+                            else -> formatRepeatDays(alarm.repeatDays, alarm.hour, alarm.minute)
+                        },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color =
+                        if (state.isSkippingNext) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                AnimatedContent(targetState = action, label = "Alarm row action") { target ->
+                    when (target) {
+                        RowAction.UNDO -> TextButton(onClick = onCancelSkip) { Text("Undo") }
+                        RowAction.SKIP -> TextButton(onClick = onSkip) { Text("Skip next") }
+                        RowAction.NONE -> Spacer(modifier = Modifier)
+                    }
                 }
             }
 
@@ -545,20 +568,63 @@ fun formatRepeatDays(days: Set<Int>, hour: Int, minute: Int): String {
     }
     if (days.size == 7) return "Every day"
 
-    val sortedDays = days.toSortedSet()
-    val dayNames = sortedDays.map {
-        when (it) {
-            Calendar.SUNDAY -> "Sun"
-            Calendar.MONDAY -> "Mon"
-            Calendar.TUESDAY -> "Tue"
-            Calendar.WEDNESDAY -> "Wed"
-            Calendar.THURSDAY -> "Thu"
-            Calendar.FRIDAY -> "Fri"
-            Calendar.SATURDAY -> "Sat"
-            else -> ""
-        }
+    return days.toSortedSet().joinToString(", ") { shortDayName(it) }
+}
+
+private const val DAYS_IN_WEEK = 7L
+
+private fun shortDayName(calendarDay: Int): String =
+    when (calendarDay) {
+        Calendar.SUNDAY -> "Sun"
+        Calendar.MONDAY -> "Mon"
+        Calendar.TUESDAY -> "Tue"
+        Calendar.WEDNESDAY -> "Wed"
+        Calendar.THURSDAY -> "Thu"
+        Calendar.FRIDAY -> "Fri"
+        Calendar.SATURDAY -> "Sat"
+        else -> ""
     }
-    return dayNames.joinToString(", ")
+
+/** [epochDay] named the way someone would say it out loud on [todayEpochDay]. */
+private fun relativeDayLabel(epochDay: Long, todayEpochDay: Long): String {
+    val daysAway = epochDay - todayEpochDay
+    return when {
+        daysAway == 0L -> "today"
+        daysAway == 1L -> "tomorrow"
+        daysAway >= DAYS_IN_WEEK -> "next week"
+        // DayOfWeek runs Mon(1)..Sun(7) where Calendar runs Sun(1)..Sat(7).
+        else -> shortDayName(LocalDate.ofEpochDay(epochDay).dayOfWeek.value % 7 + 1)
+    }
+}
+
+/** "Skipping today · rings tomorrow", or just the landing point if the skipped one is unknown. */
+fun formatSkipStatus(
+    skippedTriggerMillis: Long?,
+    nextTriggerMillis: Long,
+    nowMillis: Long,
+): String {
+    val today = localDayOf(nowMillis)
+    val rings = "rings ${relativeDayLabel(localDayOf(nextTriggerMillis), today)}"
+    val skipped = skippedTriggerMillis ?: return rings.replaceFirstChar { it.uppercase() }
+    return "Skipping ${relativeDayLabel(localDayOf(skipped), today)} · $rings"
+}
+
+/** "Rings in 42 min", rounded up so the text never claims less time than is left. */
+fun formatCountdown(millisUntilNext: Long): String {
+    val minutes = ceil(millisUntilNext / 60_000.0).toInt().coerceAtLeast(1)
+    val hours = minutes / 60
+    val minutesPastHour = minutes % 60
+    return when {
+        hours == 0 -> "Rings in $minutes min"
+        minutesPastHour == 0 -> "Rings in $hours hr"
+        else -> "Rings in $hours hr $minutesPastHour min"
+    }
+}
+
+private enum class RowAction {
+    NONE,
+    SKIP,
+    UNDO,
 }
 
 private fun getRingtoneDisplayName(context: Context, ringtoneUri: String?): String {

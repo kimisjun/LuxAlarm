@@ -18,6 +18,8 @@ package com.dsalmun.luxalarm.testing
 
 import com.dsalmun.luxalarm.AlarmViewModel
 import com.dsalmun.luxalarm.data.AlarmItem
+import com.dsalmun.luxalarm.data.localDayOf
+import com.dsalmun.luxalarm.data.nextTrigger
 import java.util.Calendar
 import java.util.TimeZone
 
@@ -88,13 +90,25 @@ fun alarm(
         skippedOccurrenceDay = skippedOccurrenceDay,
     )
 
+/**
+ * Derives the trigger instants the way the ViewModel does, so a state is never self-inconsistent.
+ */
 fun uiState(
     item: AlarmItem = alarm(),
     isUpcoming: Boolean = false,
     isSkippingNext: Boolean = false,
-): AlarmViewModel.AlarmUiState =
-    AlarmViewModel.AlarmUiState(
+    nowMillis: Long = System.currentTimeMillis(),
+): AlarmViewModel.AlarmUiState {
+    val rawNext = nextTrigger(item.hour, item.minute, item.repeatDays, nowMillis)
+    return AlarmViewModel.AlarmUiState(
         alarm = item,
         isUpcoming = isUpcoming,
         isSkippingNext = isSkippingNext,
+        skippedTriggerMillis = rawNext.takeIf { isSkippingNext },
+        nextTriggerMillis =
+            if (isSkippingNext)
+                nextTrigger(item.hour, item.minute, item.repeatDays, nowMillis, localDayOf(rawNext))
+            else rawNext,
+        nowMillis = nowMillis,
     )
+}

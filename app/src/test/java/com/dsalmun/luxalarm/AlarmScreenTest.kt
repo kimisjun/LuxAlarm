@@ -196,7 +196,7 @@ class AlarmScreenTest {
         val (hour, minute) = clockTimeIn(30 * 60 * 1000L)
         setContent(alarm(id = 5, hour = hour, minute = minute, repeatDays = EVERY_DAY))
 
-        composeRule.onNodeWithText("Dismiss").performClick()
+        composeRule.onNodeWithText("Skip next").performClick()
 
         assertEquals(1, repository.skipAlarmsCallCount)
         assertEquals(listOf(5), repository.lastSkipIds)
@@ -215,7 +215,7 @@ class AlarmScreenTest {
                 skippedOccurrenceDay = localDayOf(next),
             )
         )
-        composeRule.onNodeWithText("Skipping next alarm").assertIsDisplayed()
+        composeRule.onNodeWithText("Skipping", substring = true).assertIsDisplayed()
 
         composeRule.onNodeWithText("Undo").performClick()
 

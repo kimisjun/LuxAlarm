@@ -29,6 +29,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.dsalmun.luxalarm.testing.EVERY_DAY
 import com.dsalmun.luxalarm.testing.WEEKDAYS
 import com.dsalmun.luxalarm.testing.alarm
+import com.dsalmun.luxalarm.testing.clockTimeIn
 import com.dsalmun.luxalarm.testing.uiState
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
 import java.util.Calendar
@@ -120,55 +121,110 @@ class AlarmScreenContentTest {
     }
 
     @Test
-    fun anUpcomingAlarm_offersDismiss() {
-        setContent(states = listOf(uiState(alarm(id = 1), isUpcoming = true)))
+    fun anUpcomingRepeatingAlarm_offersSkipNext() {
+        setContent(
+            states = listOf(uiState(alarm(id = 1, repeatDays = EVERY_DAY), isUpcoming = true))
+        )
 
-        composeRule.onNodeWithText("Dismiss").assertIsDisplayed()
-        composeRule.onNodeWithText("Skipping next alarm").assertDoesNotExist()
+        composeRule.onNodeWithText("Skip next").assertIsDisplayed()
         composeRule.onNodeWithText("Undo").assertDoesNotExist()
     }
 
+    /** Skipping a one-shot only turns it off, which is the switch's job. */
     @Test
-    fun aSkippedAlarm_showsTheBannerAndUndoInsteadOfDismiss() {
-        setContent(states = listOf(uiState(alarm(id = 1), isSkippingNext = true)))
+    fun anUpcomingOneShotAlarm_offersNoActionBesideItsSwitch() {
+        val now = System.currentTimeMillis()
+        val (hour, minute) = clockTimeIn(42 * 60 * 1000L)
+        setContent(
+            states =
+                listOf(
+                    uiState(
+                        alarm(id = 1, hour = hour, minute = minute),
+                        isUpcoming = true,
+                        nowMillis = now,
+                    )
+                )
+        )
 
-        composeRule.onNodeWithText("Skipping next alarm").assertIsDisplayed()
-        composeRule.onNodeWithText("Undo").assertIsDisplayed()
-        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
+        composeRule.onNodeWithText("Skip next").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Alarm enabled").assertIsDisplayed()
+        composeRule.onNodeWithText("Rings in 42 min").assertIsDisplayed()
     }
 
-    /** Guards the `else if`: a skipped alarm is never also offered as dismissable. */
+    @Test
+    fun anUpcomingAlarm_countsDownInsteadOfNamingItsDays() {
+        val now = System.currentTimeMillis()
+        val (hour, minute) = clockTimeIn(42 * 60 * 1000L)
+        setContent(
+            states =
+                listOf(
+                    uiState(
+                        alarm(id = 1, hour = hour, minute = minute, repeatDays = EVERY_DAY),
+                        isUpcoming = true,
+                        nowMillis = now,
+                    )
+                )
+        )
+
+        composeRule.onNodeWithText("Rings in 42 min").assertIsDisplayed()
+        composeRule.onNodeWithText("Every day").assertDoesNotExist()
+    }
+
+    @Test
+    fun aSkippedAlarm_saysWhenItRingsInsteadAndOffersUndo() {
+        setContent(
+            states = listOf(uiState(alarm(id = 1, repeatDays = EVERY_DAY), isSkippingNext = true))
+        )
+
+        composeRule.onNodeWithText("Skipping", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("rings", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Undo").assertIsDisplayed()
+        composeRule.onNodeWithText("Skip next").assertDoesNotExist()
+    }
+
+    /** Guards the branch order: a skipped alarm is never also offered as skippable. */
     @Test
     fun skippingTakesPrecedenceOverUpcoming() {
         setContent(
-            states = listOf(uiState(alarm(id = 1), isUpcoming = true, isSkippingNext = true))
+            states =
+                listOf(
+                    uiState(
+                        alarm(id = 1, repeatDays = EVERY_DAY),
+                        isUpcoming = true,
+                        isSkippingNext = true,
+                    )
+                )
         )
 
-        composeRule.onNodeWithText("Skipping next alarm").assertIsDisplayed()
-        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
+        composeRule.onNodeWithText("Skipping", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Skip next").assertDoesNotExist()
     }
 
     @Test
     fun anOrdinaryAlarm_offersNeitherAction() {
         setContent(states = listOf(uiState(alarm(id = 1))))
 
-        composeRule.onNodeWithText("Dismiss").assertDoesNotExist()
-        composeRule.onNodeWithText("Skipping next alarm").assertDoesNotExist()
+        composeRule.onNodeWithText("Skip next").assertDoesNotExist()
+        composeRule.onNodeWithText("Skipping", substring = true).assertDoesNotExist()
         composeRule.onNodeWithText("Undo").assertDoesNotExist()
     }
 
     @Test
-    fun dismiss_reportsTheAlarmToSkip() {
-        setContent(states = listOf(uiState(alarm(id = 4), isUpcoming = true)))
+    fun theSkipAction_reportsTheAlarmToSkip() {
+        setContent(
+            states = listOf(uiState(alarm(id = 4, repeatDays = EVERY_DAY), isUpcoming = true))
+        )
 
-        composeRule.onNodeWithText("Dismiss").performClick()
+        composeRule.onNodeWithText("Skip next").performClick()
 
         assertEquals(listOf("skip:4"), recorded)
     }
 
     @Test
     fun undo_reportsTheAlarmToUnskip() {
-        setContent(states = listOf(uiState(alarm(id = 4), isSkippingNext = true)))
+        setContent(
+            states = listOf(uiState(alarm(id = 4, repeatDays = EVERY_DAY), isSkippingNext = true))
+        )
 
         composeRule.onNodeWithText("Undo").performClick()
 

@@ -29,6 +29,7 @@ import androidx.compose.ui.test.then
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.dsalmun.luxalarm.testing.EVERY_DAY
 import com.dsalmun.luxalarm.testing.alarm
 import com.dsalmun.luxalarm.testing.uiState
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
@@ -76,6 +77,37 @@ class AlarmScreenLayoutTest {
         assertCoreControlsVisible()
     }
 
+    /** The status line and its action share a row, so a long status could crowd the button out. */
+    @Test
+    fun atLargeFontScale_anUpcomingRowStillExposesItsAction() {
+        setContent(
+            DpSize(400.dp, 500.dp),
+            fontScale = 1.5f,
+            state =
+                uiState(
+                    alarm(id = 1, hour = 7, minute = 5, repeatDays = EVERY_DAY),
+                    isUpcoming = true,
+                ),
+        )
+
+        composeRule.onNodeWithText("Skip next").assertIsDisplayed()
+    }
+
+    @Test
+    fun atLargeFontScale_aSkippedRowStillExposesItsUndo() {
+        setContent(
+            DpSize(400.dp, 500.dp),
+            fontScale = 1.5f,
+            state =
+                uiState(
+                    alarm(id = 1, hour = 7, minute = 5, repeatDays = EVERY_DAY),
+                    isSkippingNext = true,
+                ),
+        )
+
+        composeRule.onNodeWithText("Undo").assertIsDisplayed()
+    }
+
     @Test
     fun atLargeFontScale_anExpandedRowStillExposesItsControls() {
         setContent(DpSize(400.dp, 1000.dp), fontScale = 1.5f, expandedAlarmId = 1)
@@ -97,6 +129,7 @@ class AlarmScreenLayoutTest {
         size: DpSize,
         fontScale: Float = 1f,
         expandedAlarmId: Int? = null,
+        state: AlarmViewModel.AlarmUiState = uiState(alarm(id = 1, hour = 7, minute = 5)),
     ) {
         composeRule.setContent {
             LuxAlarmTheme(dynamicColor = false) {
@@ -104,16 +137,16 @@ class AlarmScreenLayoutTest {
                     DeviceConfigurationOverride.ForcedSize(size) then
                         DeviceConfigurationOverride.FontScale(fontScale)
                 ) {
-                    Content(expandedAlarmId)
+                    Content(expandedAlarmId, state)
                 }
             }
         }
     }
 
     @Composable
-    private fun Content(expandedAlarmId: Int?) {
+    private fun Content(expandedAlarmId: Int?, state: AlarmViewModel.AlarmUiState) {
         AlarmScreenContent(
-            alarmStates = listOf(uiState(alarm(id = 1, hour = 7, minute = 5))),
+            alarmStates = listOf(state),
             expandedAlarmId = expandedAlarmId,
             ringtoneNameFor = { "Bright Morning" },
             onSettingsClick = {},

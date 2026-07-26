@@ -19,6 +19,7 @@ package com.dsalmun.luxalarm
 import com.dsalmun.luxalarm.data.AlarmItem
 import com.dsalmun.luxalarm.testing.FakeAlarmRepository
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -387,5 +388,21 @@ class AlarmViewModelTest {
 
         eventJob.cancel()
         stateJob.cancel()
+    }
+
+    @Test
+    fun millisUntilNextTick_landsJustPastTheNextMinuteBoundary() {
+        val minute = 60_000L
+        val boundary = 1_770_000_000_000L / minute * minute
+
+        for (offset in listOf(0L, 1L, 29_999L, 30_000L, 59_999L)) {
+            val now = boundary + offset
+            val wakeUp = now + millisUntilNextTick(now)
+
+            assertTrue(
+                wakeUp > boundary + minute && wakeUp <= boundary + minute + 100L,
+                "tick at offset $offset woke at ${wakeUp - boundary - minute} past the boundary",
+            )
+        }
     }
 }

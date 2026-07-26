@@ -35,15 +35,12 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
-    private companion object {
-        const val TICK_INTERVAL_MILLIS = 30_000L
-    }
-
     // The alarm Flow only re-emits on DB changes, so tick to keep upcoming/skipping state live.
     private val ticker = flow {
         while (true) {
-            emit(System.currentTimeMillis())
-            delay(TICK_INTERVAL_MILLIS)
+            val now = System.currentTimeMillis()
+            emit(now)
+            delay(millisUntilNextTick(now))
         }
     }
 
@@ -149,13 +146,29 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
         // expired skip must not be shown as skipping — the row would claim a still-ringing alarm.
         val isSkippingNext = skippedOccurrenceDay == localDayOf(rawNext)
         val isUpcoming = isActive && !isSkippingNext && (rawNext - now) in 0..UPCOMING_LEAD_MILLIS
-        return AlarmUiState(alarm = this, isUpcoming = isUpcoming, isSkippingNext = isSkippingNext)
+        return AlarmUiState(
+            alarm = this,
+            isUpcoming = isUpcoming,
+            isSkippingNext = isSkippingNext,
+            skippedTriggerMillis = rawNext.takeIf { isSkippingNext },
+            nextTriggerMillis =
+                if (isSkippingNext) nextTrigger(hour, minute, repeatDays, now, skippedOccurrenceDay)
+                else rawNext,
+            nowMillis = now,
+        )
     }
 
+    /**
+     * @param skippedTriggerMillis the occurrence being passed over; null unless [isSkippingNext].
+     * @param nextTriggerMillis when the alarm rings next, with any skip already applied.
+     */
     data class AlarmUiState(
         val alarm: AlarmItem,
         val isUpcoming: Boolean,
         val isSkippingNext: Boolean,
+        val skippedTriggerMillis: Long?,
+        val nextTriggerMillis: Long,
+        val nowMillis: Long,
     )
 
     sealed class Event {
@@ -165,6 +178,17 @@ class AlarmViewModel(private val repository: IAlarmRepository) : ViewModel() {
         data object ShowPermissionError : Event()
     }
 }
+
+private const val TICK_INTERVAL_MILLIS = 60_000L
+private const val TICK_SKEW_MILLIS = 100L
+
+/**
+ * Delay from [nowMillis] to the next state recompute. Alarm times carry no seconds, so upcoming and
+ * skipping state only flips on a minute boundary; waking just past one keeps the flip prompt, where
+ * a free-running interval would lag by up to its full period.
+ */
+internal fun millisUntilNextTick(nowMillis: Long): Long =
+    TICK_INTERVAL_MILLIS - nowMillis % TICK_INTERVAL_MILLIS + TICK_SKEW_MILLIS
 
 class AlarmViewModelFactory : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
