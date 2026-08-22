@@ -33,7 +33,7 @@ interface IAlarmRepository {
 
     suspend fun setAlarmRingtone(alarmId: Int, ringtoneUri: String?)
 
-    suspend fun setAlarmVolume(alarmId: Int, volume: Float?)
+    suspend fun setAlarmVolume(alarmId: Int, volume: Float)
 
     suspend fun setAlarmVibration(alarmId: Int, enabled: Boolean)
 

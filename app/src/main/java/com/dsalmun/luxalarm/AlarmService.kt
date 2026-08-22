@@ -44,6 +44,7 @@ import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
 import androidx.core.net.toUri
+import kotlin.math.roundToInt
 
 class AlarmService : Service() {
     private var mediaPlayer: MediaPlayer? = null
@@ -51,6 +52,7 @@ class AlarmService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var vibrator: Vibrator? = null
     private var alarmStopped = false
+    private var alarmVolumeBeforeOverride: Int? = null
 
     companion object {
         const val ACTION_STOP_ALARM = "com.dsalmun.luxalarm.STOP_ALARM"
@@ -72,9 +74,7 @@ class AlarmService : Service() {
             else -> {
                 val alarmId = intent?.getIntExtra("alarm_id", -1) ?: -1
                 val ringtoneUri = intent?.getStringExtra("ringtone_uri")
-                val volume =
-                    if (intent?.hasExtra("volume") == true) intent.getFloatExtra("volume", 1.0f)
-                    else null
+                val volume = intent?.getFloatExtra("volume", 1f) ?: 1f
                 val vibrationEnabled = intent?.getBooleanExtra("vibration_enabled", true) ?: true
                 startAlarm(alarmId, ringtoneUri, volume, vibrationEnabled)
                 START_STICKY
@@ -85,7 +85,7 @@ class AlarmService : Service() {
     private fun startAlarm(
         alarmId: Int,
         ringtoneUri: String?,
-        volume: Float?,
+        volume: Float,
         vibrationEnabled: Boolean,
     ) {
         isRunning = true
@@ -121,7 +121,7 @@ class AlarmService : Service() {
         }
     }
 
-    private fun startRingtone(ringtoneUri: String?, volume: Float?, audioAttrs: AudioAttributes) {
+    private fun startRingtone(ringtoneUri: String?, volume: Float, audioAttrs: AudioAttributes) {
         // Audio focus keeps the system from ducking or stopping the alarm.
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioFocusRequest =
@@ -130,12 +130,42 @@ class AlarmService : Service() {
                 .build()
         audioManager?.requestAudioFocus(audioFocusRequest!!)
 
+        overrideAlarmStreamVolume(volume)
+
         val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val selectedAlarmUri = ringtoneUri?.toUri()
         mediaPlayer =
-            createPlayerForUri(selectedAlarmUri, audioAttrs, volume)
-                ?: createPlayerForUri(defaultAlarmUri, audioAttrs, volume)
+            createPlayerForUri(selectedAlarmUri, audioAttrs)
+                ?: createPlayerForUri(defaultAlarmUri, audioAttrs)
                 ?: throw IllegalStateException("Failed to create MediaPlayer for alarm audio")
+    }
+
+    private fun overrideAlarmStreamVolume(volume: Float) {
+        val audioManager = audioManager ?: return
+        try {
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            val index =
+                (volume.coerceIn(0f, 1f) * maxVolume).roundToInt().let {
+                    if (volume > 0f) it.coerceAtLeast(1) else it
+                }
+            alarmVolumeBeforeOverride = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, index, 0)
+        } catch (e: Exception) {
+            Log.w("AlarmService", "Failed to override the alarm stream volume", e)
+            alarmVolumeBeforeOverride = null
+        }
+    }
+
+    private fun restoreAlarmStreamVolume() {
+        val audioManager = audioManager
+        val previousVolume = alarmVolumeBeforeOverride
+        alarmVolumeBeforeOverride = null
+        if (audioManager == null || previousVolume == null) return
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_ALARM, previousVolume, 0)
+        } catch (e: Exception) {
+            Log.w("AlarmService", "Failed to restore the alarm stream volume", e)
+        }
     }
 
     /** [audioAttrs] is only read on pre-Tiramisu devices. */
@@ -159,11 +189,7 @@ class AlarmService : Service() {
         }
     }
 
-    private fun createPlayerForUri(
-        uri: Uri?,
-        audioAttrs: AudioAttributes,
-        volume: Float?,
-    ): MediaPlayer? {
+    private fun createPlayerForUri(uri: Uri?, audioAttrs: AudioAttributes): MediaPlayer? {
         if (uri == null) return null
         var player: MediaPlayer? = null
         return try {
@@ -174,7 +200,6 @@ class AlarmService : Service() {
                 setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
                 isLooping = true
                 prepare()
-                if (volume != null) setVolume(volume, volume)
                 start()
             }
         } catch (e: Exception) {
@@ -200,6 +225,7 @@ class AlarmService : Service() {
         vibrator?.cancel()
         vibrator = null
 
+        restoreAlarmStreamVolume()
         audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
         audioFocusRequest = null
         audioManager = null

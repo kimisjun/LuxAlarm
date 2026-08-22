@@ -26,6 +26,7 @@ import com.dsalmun.luxalarm.data.AlarmDatabase
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_1_2
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_2_3
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_3_4
+import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_4_5
 import com.dsalmun.luxalarm.data.AlarmItem
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -180,9 +181,60 @@ class MigrationTest {
         db.close()
     }
 
+    private data class V4Alarm(
+        val id: Int,
+        val hour: Int,
+        val minute: Int,
+        val isActive: Boolean,
+        val repeatDays: String,
+        val ringtoneUri: String?,
+        val volume: Float?,
+        val vibrationEnabled: Boolean,
+        val skippedOccurrenceDay: Long?,
+    )
+
+    private fun createV4Database(alarms: List<V4Alarm>) {
+        val dbPath = context.getDatabasePath(dbName)
+        dbPath.parentFile?.mkdirs()
+        val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
+        db.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `alarms` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `hour` INTEGER NOT NULL,
+                `minute` INTEGER NOT NULL,
+                `isActive` INTEGER NOT NULL,
+                `repeatDays` TEXT NOT NULL,
+                `ringtoneUri` TEXT,
+                `volume` REAL,
+                `vibrationEnabled` INTEGER NOT NULL,
+                `skippedOccurrenceDay` INTEGER
+            )
+            """
+                .trimIndent()
+        )
+        for (alarm in alarms) {
+            val values =
+                ContentValues().apply {
+                    put("id", alarm.id)
+                    put("hour", alarm.hour)
+                    put("minute", alarm.minute)
+                    put("isActive", if (alarm.isActive) 1 else 0)
+                    put("repeatDays", alarm.repeatDays)
+                    put("ringtoneUri", alarm.ringtoneUri)
+                    put("volume", alarm.volume)
+                    put("vibrationEnabled", if (alarm.vibrationEnabled) 1 else 0)
+                    put("skippedOccurrenceDay", alarm.skippedOccurrenceDay)
+                }
+            db.insert("alarms", null, values)
+        }
+        db.version = 4
+        db.close()
+    }
+
     private fun openV3Database(): AlarmDatabase =
         Room.databaseBuilder(context, AlarmDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 
@@ -280,14 +332,14 @@ class MigrationTest {
             assertEquals(7, alarm1.hour)
             assertEquals(30, alarm1.minute)
             assertEquals("content://media/ringtone", alarm1.ringtoneUri)
-            assertNull(alarm1.volume)
+            assertEquals(1f, alarm1.volume)
             assertEquals(true, alarm1.vibrationEnabled)
 
             val alarm2 = alarms.first { it.id == 2 }
             assertEquals(9, alarm2.hour)
             assertEquals(0, alarm2.minute)
             assertNull(alarm2.ringtoneUri)
-            assertNull(alarm2.volume)
+            assertEquals(1f, alarm2.volume)
             assertEquals(true, alarm2.vibrationEnabled)
         } finally {
             db.close()
@@ -318,7 +370,7 @@ class MigrationTest {
             assertEquals(2, alarms.size)
 
             val migrated = alarms.first { it.id == 1 }
-            assertNull(migrated.volume)
+            assertEquals(1f, migrated.volume)
 
             val newAlarm = alarms.first { it.id != 1 }
             assertEquals(8, newAlarm.hour)
@@ -428,6 +480,103 @@ class MigrationTest {
 
             val newAlarm = alarms.first { it.id != 1 }
             assertEquals(123456789L, newAlarm.skippedOccurrenceDay)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun migrate4To5_turnsAnUnsetVolumeIntoAFullOne() {
+        val v4Alarms =
+            listOf(
+                V4Alarm(
+                    id = 1,
+                    hour = 7,
+                    minute = 30,
+                    isActive = true,
+                    repeatDays = "1,2,3,4,5",
+                    ringtoneUri = "content://media/ringtone",
+                    volume = null,
+                    vibrationEnabled = true,
+                    skippedOccurrenceDay = 19_000L,
+                )
+            )
+        createV4Database(v4Alarms)
+
+        val db = openV3Database()
+        try {
+            val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
+            assertEquals(1f, alarm.volume, "A slider drawn at full has to start ringing at full")
+            // The rebuilt table has to bring the rest of the row across untouched.
+            assertEquals(7, alarm.hour)
+            assertEquals(30, alarm.minute)
+            assertEquals(true, alarm.isActive)
+            assertEquals(setOf(1, 2, 3, 4, 5), alarm.repeatDays)
+            assertEquals("content://media/ringtone", alarm.ringtoneUri)
+            assertEquals(true, alarm.vibrationEnabled)
+            assertEquals(19_000L, alarm.skippedOccurrenceDay)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun migrate4To5_keepsAVolumeSomeoneChose() {
+        createV4Database(
+            listOf(
+                V4Alarm(
+                    id = 1,
+                    hour = 6,
+                    minute = 0,
+                    isActive = true,
+                    repeatDays = "",
+                    ringtoneUri = null,
+                    volume = 0.25f,
+                    vibrationEnabled = false,
+                    skippedOccurrenceDay = null,
+                )
+            )
+        )
+
+        val db = openV3Database()
+        try {
+            val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
+            assertEquals(0.25f, alarm.volume)
+            assertEquals(false, alarm.vibrationEnabled)
+        } finally {
+            db.close()
+        }
+    }
+
+    /** Autoincrement survives the table swap, so a new alarm cannot reuse a live id. */
+    @Test
+    fun migrate4To5_newRowsStillGetFreshIds() {
+        createV4Database(
+            listOf(
+                V4Alarm(
+                    id = 9,
+                    hour = 6,
+                    minute = 0,
+                    isActive = true,
+                    repeatDays = "",
+                    ringtoneUri = null,
+                    volume = null,
+                    vibrationEnabled = true,
+                    skippedOccurrenceDay = null,
+                )
+            )
+        )
+
+        val db = openV3Database()
+        try {
+            val dao = db.alarmDao()
+            runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, volume = 0.5f)) }
+
+            val alarms = runBlocking { dao.getAllAlarms().first() }
+            assertEquals(2, alarms.size)
+            val newAlarm = alarms.first { it.id != 9 }
+            assertEquals(0.5f, newAlarm.volume)
+            assertEquals(10, newAlarm.id, "A rebuilt table must not restart ids at 1")
         } finally {
             db.close()
         }

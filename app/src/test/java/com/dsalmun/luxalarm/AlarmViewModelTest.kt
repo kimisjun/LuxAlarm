@@ -223,19 +223,6 @@ class AlarmViewModelTest {
         assertEquals(0.25f, fakeRepository.lastVolume)
     }
 
-    /** Null is the "follow the system alarm volume" sentinel, so it has to reach the repository. */
-    @Test
-    fun setAlarmVolume_withNull_callsRepositoryWithNull() = runTest {
-        val alarmId = 2
-
-        viewModel.setAlarmVolume(alarmId, null)
-        testDispatcher.scheduler.advanceUntilIdle()
-
-        assertEquals(1, fakeRepository.setAlarmVolumeCallCount)
-        assertEquals(alarmId, fakeRepository.lastVolumeAlarmId)
-        assertEquals(null, fakeRepository.lastVolume)
-    }
-
     @Test
     fun setAlarmVibration_callsRepository() = runTest {
         val alarmId = 1

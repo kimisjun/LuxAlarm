@@ -74,7 +74,7 @@ fun alarm(
     isActive: Boolean = true,
     repeatDays: Set<Int> = emptySet(),
     ringtoneUri: String? = null,
-    volume: Float? = null,
+    volume: Float = 1f,
     vibrationEnabled: Boolean = true,
     skippedOccurrenceDay: Long? = null,
 ): AlarmItem =

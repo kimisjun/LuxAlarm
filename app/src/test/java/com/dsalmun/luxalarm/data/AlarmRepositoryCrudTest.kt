@@ -285,15 +285,6 @@ class AlarmRepositoryCrudTest {
     }
 
     @Test
-    fun setAlarmVolume_nullRestoresTheSystemDefault() = runBlocking {
-        dao.insert(alarm(id = 1, volume = 0.5f))
-
-        repository.setAlarmVolume(1, null)
-
-        assertNull(dao.getAlarmById(1)!!.volume)
-    }
-
-    @Test
     fun setAlarmVibration_togglesTheFlag() = runBlocking {
         dao.insert(alarm(id = 1, vibrationEnabled = true))
 

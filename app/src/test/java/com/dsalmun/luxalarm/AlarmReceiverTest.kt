@@ -91,13 +91,13 @@ class AlarmReceiverTest {
         assertEquals(-1, started.getIntExtra("alarm_id", 0))
     }
 
-    /** Null volume means "use the ringtone's own level", told apart from 0.0 only by absence. */
+    /** An alarm armed before the volume became non-null carries no extra, and rings at full. */
     @Test
-    fun withNoVolume_theExtraIsOmittedRatherThanDefaulted() {
+    fun withNoVolumeExtra_theServiceIsToldFullVolume() {
         sendAlarmBroadcast(alarmIntent(volume = null))
 
         val started = assertNotNull(nextStartedService())
-        assertFalse(started.hasExtra("volume"), "An unset volume must not become a value")
+        assertEquals(1f, started.getFloatExtra("volume", -1f))
     }
 
     @Test
@@ -116,7 +116,7 @@ class AlarmReceiverTest {
         val started = assertNotNull(nextStartedService())
         assertEquals(-1, started.getIntExtra("alarm_id", 0))
         assertNull(started.getStringExtra("ringtone_uri"))
-        assertFalse(started.hasExtra("volume"))
+        assertEquals(1f, started.getFloatExtra("volume", -1f))
         assertTrue(started.getBooleanExtra("vibration_enabled", false))
     }
 

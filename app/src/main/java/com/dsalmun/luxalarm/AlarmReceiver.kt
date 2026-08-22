@@ -28,8 +28,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val alarmIds = intent?.getIntegerArrayListExtra("alarm_ids") ?: arrayListOf()
         val alarmId = alarmIds.firstOrNull() ?: -1
         val ringtoneUri = intent?.getStringExtra("ringtone_uri")
-        val volume =
-            if (intent?.hasExtra("volume") == true) intent.getFloatExtra("volume", 1.0f) else null
+        val volume = intent?.getFloatExtra("volume", 1f) ?: 1f
         val vibrationEnabled = intent?.getBooleanExtra("vibration_enabled", true) ?: true
 
         if (AppContainer.repository.setRingingAlarm()) {
@@ -37,7 +36,7 @@ class AlarmReceiver : BroadcastReceiver() {
                 Intent(context, AlarmService::class.java).apply {
                     putExtra("alarm_id", alarmId)
                     putExtra("ringtone_uri", ringtoneUri)
-                    volume?.let { putExtra("volume", it) }
+                    putExtra("volume", volume)
                     putExtra("vibration_enabled", vibrationEnabled)
                 }
             ContextCompat.startForegroundService(context, serviceIntent)

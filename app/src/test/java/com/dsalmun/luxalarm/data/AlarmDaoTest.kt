@@ -85,8 +85,8 @@ class AlarmDaoTest {
         dao.insert(alarm(id = 1, hour = 7, minute = 0))
 
         assertNull(dao.getAlarmById(1)!!.ringtoneUri, "ringtoneUri defaults to null")
-        assertNull(dao.getAlarmById(1)!!.volume, "volume defaults to null")
         assertNull(dao.getAlarmById(1)!!.skippedOccurrenceDay, "skippedOccurrenceDay defaults null")
+        assertEquals(1f, dao.getAlarmById(1)!!.volume, "volume defaults to full")
         assertTrue(dao.getAlarmById(1)!!.vibrationEnabled, "vibration defaults on")
 
         val uri = "content://media/internal/audio/media/42"
@@ -105,11 +105,10 @@ class AlarmDaoTest {
         assertFalse(stored.vibrationEnabled)
         assertEquals(19_000L, stored.skippedOccurrenceDay)
 
-        dao.update(stored.copy(ringtoneUri = null, volume = null, skippedOccurrenceDay = null))
+        dao.update(stored.copy(ringtoneUri = null, skippedOccurrenceDay = null))
 
         val cleared = dao.getAlarmById(1)!!
         assertNull(cleared.ringtoneUri, "A null ringtone clears the stored URI")
-        assertNull(cleared.volume)
         assertNull(cleared.skippedOccurrenceDay)
     }
 

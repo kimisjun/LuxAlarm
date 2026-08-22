@@ -471,8 +471,7 @@ fun AlarmRow(
                         contentDescription = "Volume",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    var sliderVolume by
-                        remember(alarm.volume) { mutableFloatStateOf(alarm.volume ?: 1f) }
+                    var sliderVolume by remember(alarm.volume) { mutableFloatStateOf(alarm.volume) }
                     Slider(
                         value = sliderVolume,
                         onValueChange = { sliderVolume = it },

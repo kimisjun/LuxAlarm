@@ -259,12 +259,60 @@ class AlarmServiceTest {
     }
 
     @Test
-    fun start_appliesTheVolumeExtraToBothChannels() {
+    fun start_withAVolumeOverride_setsTheDeviceAlarmVolumeToIt() {
+        setDeviceAlarmVolume(1)
+
+        start(volume = 1f)
+
+        assertEquals(maxDeviceAlarmVolume, deviceAlarmVolume)
+    }
+
+    @Test
+    fun start_withAQuietVolumeOverride_turnsTheDeviceAlarmVolumeDown() {
+        setDeviceAlarmVolume(maxDeviceAlarmVolume)
+
         start(volume = 0.25f)
 
-        val player = createdPlayers.single()
-        assertEquals(0.25f, shadowOf(player).leftVolume)
-        assertEquals(0.25f, shadowOf(player).rightVolume)
+        assertEquals(2, deviceAlarmVolume, "A quarter of the device's seven steps")
+    }
+
+    @Test
+    fun start_withAVolumeOverrideTooSmallToRound_stillMakesASound() {
+        setDeviceAlarmVolume(maxDeviceAlarmVolume)
+
+        start(volume = 0.01f)
+
+        assertEquals(1, deviceAlarmVolume)
+    }
+
+    /** An alarm armed before the volume became non-null reaches the service without the extra. */
+    @Test
+    fun start_withNoVolumeExtra_ringsAtFullVolume() {
+        setDeviceAlarmVolume(3)
+
+        start(volume = null)
+
+        assertEquals(maxDeviceAlarmVolume, deviceAlarmVolume)
+    }
+
+    @Test
+    fun stop_afterAnAlarmWithNoVolumeExtra_putsTheDeviceAlarmVolumeBack() {
+        setDeviceAlarmVolume(3)
+        start(volume = null)
+
+        stop()
+
+        assertEquals(3, deviceAlarmVolume)
+    }
+
+    @Test
+    fun stop_putsTheDeviceAlarmVolumeBack() {
+        setDeviceAlarmVolume(1)
+        start(volume = 1f)
+
+        stop()
+
+        assertEquals(1, deviceAlarmVolume, "The override lasts only as long as the alarm")
     }
 
     /** The case that split notification, ringtone and vibration into separately guarded steps. */
@@ -347,6 +395,16 @@ class AlarmServiceTest {
             listOf(0L, 1_000L, 500L, 1_000L, 500L),
             shadowOf(legacyVibrator).pattern?.toList(),
         )
+    }
+
+    private val maxDeviceAlarmVolume
+        get() = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+
+    private val deviceAlarmVolume
+        get() = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+
+    private fun setDeviceAlarmVolume(volume: Int) {
+        audioManager.setStreamVolume(AudioManager.STREAM_ALARM, volume, 0)
     }
 
     private fun start(

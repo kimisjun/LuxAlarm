@@ -142,9 +142,9 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         scheduleNextAlarm()
     }
 
-    override suspend fun setAlarmVolume(alarmId: Int, volume: Float?) {
+    override suspend fun setAlarmVolume(alarmId: Int, volume: Float) {
         val alarm = alarmDao.getAlarmById(alarmId) ?: return
-        val updatedAlarm = alarm.copy(volume = volume?.coerceIn(0f, 1f))
+        val updatedAlarm = alarm.copy(volume = volume.coerceIn(0f, 1f))
         alarmDao.update(updatedAlarm)
         scheduleNextAlarm()
     }
@@ -196,7 +196,7 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
             Intent(context, AlarmReceiver::class.java).apply {
                 putIntegerArrayListExtra("alarm_ids", ArrayList(alarmIds))
                 putExtra("ringtone_uri", nextAlarm.ringtoneUri)
-                nextAlarm.volume?.let { putExtra("volume", it) }
+                putExtra("volume", nextAlarm.volume)
                 putExtra("vibration_enabled", nextAlarm.vibrationEnabled)
             }
         val pendingIntent =
