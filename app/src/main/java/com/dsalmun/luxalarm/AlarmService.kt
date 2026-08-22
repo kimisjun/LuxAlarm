@@ -26,6 +26,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.database.ContentObserver
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
@@ -34,12 +35,15 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationCompat
@@ -53,6 +57,8 @@ class AlarmService : Service() {
     private var vibrator: Vibrator? = null
     private var alarmStopped = false
     private var alarmVolumeBeforeOverride: Int? = null
+    private var forcedAlarmVolume: Int? = null
+    private var alarmVolumeWatcher: ContentObserver? = null
 
     companion object {
         const val ACTION_STOP_ALARM = "com.dsalmun.luxalarm.STOP_ALARM"
@@ -150,16 +156,41 @@ class AlarmService : Service() {
                 }
             alarmVolumeBeforeOverride = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
             audioManager.setStreamVolume(AudioManager.STREAM_ALARM, index, 0)
+            forcedAlarmVolume = index
+            watchForVolumeChanges()
         } catch (e: Exception) {
             Log.w("AlarmService", "Failed to override the alarm stream volume", e)
             alarmVolumeBeforeOverride = null
+            forcedAlarmVolume = null
         }
+    }
+
+    private fun watchForVolumeChanges() {
+        val audioManager = audioManager ?: return
+        val watcher =
+            object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    val forced = forcedAlarmVolume ?: return
+                    try {
+                        if (audioManager.getStreamVolume(AudioManager.STREAM_ALARM) == forced)
+                            return
+                        audioManager.setStreamVolume(AudioManager.STREAM_ALARM, forced, 0)
+                    } catch (e: Exception) {
+                        Log.w("AlarmService", "Failed to hold the alarm stream volume", e)
+                    }
+                }
+            }
+        alarmVolumeWatcher = watcher
+        contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, watcher)
     }
 
     private fun restoreAlarmStreamVolume() {
         val audioManager = audioManager
         val previousVolume = alarmVolumeBeforeOverride
         alarmVolumeBeforeOverride = null
+        forcedAlarmVolume = null
+        alarmVolumeWatcher?.let { contentResolver.unregisterContentObserver(it) }
+        alarmVolumeWatcher = null
         if (audioManager == null || previousVolume == null) return
         try {
             audioManager.setStreamVolume(AudioManager.STREAM_ALARM, previousVolume, 0)

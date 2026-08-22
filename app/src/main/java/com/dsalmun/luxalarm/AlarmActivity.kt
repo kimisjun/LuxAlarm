@@ -23,6 +23,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
@@ -82,6 +83,17 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
         }
         setupFullscreen()
     }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean =
+        isVolumeKey(keyCode) || super.onKeyDown(keyCode, event)
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        isVolumeKey(keyCode) || super.onKeyUp(keyCode, event)
+
+    private fun isVolumeKey(keyCode: Int) =
+        keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
 
     private fun setupLightSensor() {
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager

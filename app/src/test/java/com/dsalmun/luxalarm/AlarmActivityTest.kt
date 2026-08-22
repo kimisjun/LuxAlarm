@@ -21,6 +21,7 @@ import android.content.Intent
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorManager
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -93,6 +94,29 @@ class AlarmActivityTest {
         get() =
             ApplicationProvider.getApplicationContext<Context>()
                 .getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    @Test
+    fun theVolumeKeysAreSwallowedWhileTheAlarmRings() {
+        for (keyCode in
+            listOf(
+                KeyEvent.KEYCODE_VOLUME_DOWN,
+                KeyEvent.KEYCODE_VOLUME_UP,
+                KeyEvent.KEYCODE_VOLUME_MUTE,
+            )) {
+            assertTrue(
+                activity.onKeyDown(keyCode, KeyEvent(KeyEvent.ACTION_DOWN, keyCode)),
+                "Key $keyCode must not reach the window and turn the alarm down",
+            )
+            assertTrue(activity.onKeyUp(keyCode, KeyEvent(KeyEvent.ACTION_UP, keyCode)))
+        }
+    }
+
+    /** Swallowing everything would take the keys the screen itself still needs. */
+    @Test
+    fun otherKeysAreLeftAlone() {
+        val keyCode = KeyEvent.KEYCODE_A
+        assertFalse(activity.onKeyDown(keyCode, KeyEvent(KeyEvent.ACTION_DOWN, keyCode)))
+    }
 
     @Test
     fun withNoReadingYet_theAlarmCannotBeStopped() {

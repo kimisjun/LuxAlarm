@@ -27,8 +27,10 @@ import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
+import android.os.Looper
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.Settings
 import androidx.core.net.toUri
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
@@ -306,6 +308,29 @@ class AlarmServiceTest {
     }
 
     @Test
+    fun whileRinging_aVolumeChangeFromElsewhereIsPutBack() {
+        setDeviceAlarmVolume(1)
+        start(volume = 1f)
+
+        setDeviceAlarmVolume(2)
+        notifyVolumeSettingChanged()
+
+        assertEquals(maxDeviceAlarmVolume, deviceAlarmVolume, "The alarm's volume has to win")
+    }
+
+    @Test
+    fun afterStopping_aVolumeChangeIsLeftAlone() {
+        setDeviceAlarmVolume(1)
+        start(volume = 1f)
+        stop()
+
+        setDeviceAlarmVolume(5)
+        notifyVolumeSettingChanged()
+
+        assertEquals(5, deviceAlarmVolume, "A stopped alarm has no say over the device volume")
+    }
+
+    @Test
     fun stop_putsTheDeviceAlarmVolumeBack() {
         setDeviceAlarmVolume(1)
         start(volume = 1f)
@@ -402,6 +427,11 @@ class AlarmServiceTest {
 
     private val deviceAlarmVolume
         get() = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+
+    private fun notifyVolumeSettingChanged() {
+        context.contentResolver.notifyChange(Settings.System.CONTENT_URI, null)
+        shadowOf(Looper.getMainLooper()).idle()
+    }
 
     private fun setDeviceAlarmVolume(volume: Int) {
         audioManager.setStreamVolume(AudioManager.STREAM_ALARM, volume, 0)
