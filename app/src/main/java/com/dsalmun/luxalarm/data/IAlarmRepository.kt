@@ -51,6 +51,12 @@ interface IAlarmRepository {
 
     fun clearRingingAlarm()
 
+    fun rememberDeviceAlarmVolume(volume: Int)
+
+    fun rememberedDeviceAlarmVolume(): Int?
+
+    fun forgetDeviceAlarmVolume()
+
     suspend fun deactivateOneShotAlarms(ids: List<Int>)
 
     suspend fun cancelV1Alarms()

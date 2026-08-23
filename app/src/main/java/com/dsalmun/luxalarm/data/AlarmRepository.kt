@@ -36,6 +36,7 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         const val PREFS_NAME = "alarm_state"
         const val KEY_IS_RINGING = "is_ringing"
         const val KEY_V1_MIGRATED = "v1_migrated"
+        const val KEY_DEVICE_ALARM_VOLUME = "device_alarm_volume"
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -285,6 +286,18 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
 
     override fun clearRingingAlarm() {
         prefs.edit { putBoolean(KEY_IS_RINGING, false) }
+    }
+
+    override fun rememberDeviceAlarmVolume(volume: Int) {
+        prefs.edit { putInt(KEY_DEVICE_ALARM_VOLUME, volume) }
+    }
+
+    override fun rememberedDeviceAlarmVolume(): Int? =
+        if (prefs.contains(KEY_DEVICE_ALARM_VOLUME)) prefs.getInt(KEY_DEVICE_ALARM_VOLUME, 0)
+        else null
+
+    override fun forgetDeviceAlarmVolume() {
+        prefs.edit { remove(KEY_DEVICE_ALARM_VOLUME) }
     }
 
     override suspend fun deactivateOneShotAlarms(ids: List<Int>) {

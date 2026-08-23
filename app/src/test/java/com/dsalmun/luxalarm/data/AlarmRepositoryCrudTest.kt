@@ -339,6 +339,31 @@ class AlarmRepositoryCrudTest {
     }
 
     @Test
+    fun noDeviceAlarmVolumeIsRememberedByDefault() {
+        assertNull(repository.rememberedDeviceAlarmVolume())
+    }
+
+    @Test
+    fun forgetDeviceAlarmVolume_dropsTheRememberedVolume() {
+        repository.rememberDeviceAlarmVolume(3)
+
+        repository.forgetDeviceAlarmVolume()
+
+        assertNull(repository.rememberedDeviceAlarmVolume())
+    }
+
+    @Test
+    fun theRememberedDeviceAlarmVolumeSurvivesANewRepositoryInstance() {
+        repository.rememberDeviceAlarmVolume(0)
+
+        assertEquals(
+            0,
+            AlarmRepository(dao, context).rememberedDeviceAlarmVolume(),
+            "A process that dies mid-alarm must still be able to put the volume back",
+        )
+    }
+
+    @Test
     fun deactivateOneShotAlarms_leavesRepeatingAlarmsArmed() = runBlocking {
         dao.insert(alarm(id = 1, repeatDays = emptySet()))
         dao.insert(alarm(id = 2, repeatDays = EVERY_DAY))

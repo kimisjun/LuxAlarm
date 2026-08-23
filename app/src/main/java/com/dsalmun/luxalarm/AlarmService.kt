@@ -56,7 +56,6 @@ class AlarmService : Service() {
     private var audioFocusRequest: AudioFocusRequest? = null
     private var vibrator: Vibrator? = null
     private var alarmStopped = false
-    private var alarmVolumeBeforeOverride: Int? = null
     private var forcedAlarmVolume: Int? = null
     private var alarmVolumeWatcher: ContentObserver? = null
 
@@ -137,30 +136,42 @@ class AlarmService : Service() {
         audioManager?.requestAudioFocus(audioFocusRequest!!)
 
         overrideAlarmStreamVolume(volume)
+        val playerVolume = if (forcedAlarmVolume != null) 1f else volume.coerceIn(0f, 1f)
 
         val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val selectedAlarmUri = ringtoneUri?.toUri()
         mediaPlayer =
-            createPlayerForUri(selectedAlarmUri, audioAttrs)
-                ?: createPlayerForUri(defaultAlarmUri, audioAttrs)
+            createPlayerForUri(selectedAlarmUri, audioAttrs, playerVolume)
+                ?: createPlayerForUri(defaultAlarmUri, audioAttrs, playerVolume)
                 ?: throw IllegalStateException("Failed to create MediaPlayer for alarm audio")
     }
 
     private fun overrideAlarmStreamVolume(volume: Float) {
         val audioManager = audioManager ?: return
+        val alreadyRemembered = AppContainer.repository.rememberedDeviceAlarmVolume() != null
         try {
             val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
             val index =
                 (volume.coerceIn(0f, 1f) * maxVolume).roundToInt().let {
                     if (volume > 0f) it.coerceAtLeast(1) else it
                 }
-            alarmVolumeBeforeOverride = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            if (!alreadyRemembered) {
+                AppContainer.repository.rememberDeviceAlarmVolume(
+                    audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+                )
+            }
             audioManager.setStreamVolume(AudioManager.STREAM_ALARM, index, 0)
+            if (audioManager.getStreamVolume(AudioManager.STREAM_ALARM) != index) {
+                Log.w("AlarmService", "The device kept its own alarm stream volume")
+                if (!alreadyRemembered) AppContainer.repository.forgetDeviceAlarmVolume()
+                forcedAlarmVolume = null
+                return
+            }
             forcedAlarmVolume = index
             watchForVolumeChanges()
         } catch (e: Exception) {
             Log.w("AlarmService", "Failed to override the alarm stream volume", e)
-            alarmVolumeBeforeOverride = null
+            if (!alreadyRemembered) AppContainer.repository.forgetDeviceAlarmVolume()
             forcedAlarmVolume = null
         }
     }
@@ -185,9 +196,9 @@ class AlarmService : Service() {
     }
 
     private fun restoreAlarmStreamVolume() {
-        val audioManager = audioManager
-        val previousVolume = alarmVolumeBeforeOverride
-        alarmVolumeBeforeOverride = null
+        val audioManager = audioManager ?: getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val previousVolume = AppContainer.repository.rememberedDeviceAlarmVolume()
+        AppContainer.repository.forgetDeviceAlarmVolume()
         forcedAlarmVolume = null
         alarmVolumeWatcher?.let { contentResolver.unregisterContentObserver(it) }
         alarmVolumeWatcher = null
@@ -220,7 +231,11 @@ class AlarmService : Service() {
         }
     }
 
-    private fun createPlayerForUri(uri: Uri?, audioAttrs: AudioAttributes): MediaPlayer? {
+    private fun createPlayerForUri(
+        uri: Uri?,
+        audioAttrs: AudioAttributes,
+        volume: Float,
+    ): MediaPlayer? {
         if (uri == null) return null
         var player: MediaPlayer? = null
         return try {
@@ -228,6 +243,7 @@ class AlarmService : Service() {
                 player = this
                 setDataSource(applicationContext, uri)
                 setAudioAttributes(audioAttrs)
+                setVolume(volume, volume)
                 setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
                 isLooping = true
                 prepare()

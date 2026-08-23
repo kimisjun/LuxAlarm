@@ -50,6 +50,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ServiceController
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
+import org.robolectric.shadows.ShadowAudioManager
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.util.DataSource
 
@@ -340,6 +343,41 @@ class AlarmServiceTest {
         assertEquals(1, deviceAlarmVolume, "The override lasts only as long as the alarm")
     }
 
+    @Test
+    fun aStickyRestart_stillPutsTheUsersVolumeBack() {
+        setDeviceAlarmVolume(3)
+        start(volume = 1f)
+        assertEquals(maxDeviceAlarmVolume, deviceAlarmVolume, "Precondition: the override took")
+
+        restartWithoutAnIntent()
+        stop()
+
+        assertEquals(3, deviceAlarmVolume, "The user's volume, not the alarm's")
+    }
+
+    @Test
+    fun start_whenTheStreamCarriesTheVolume_leavesThePlayerAtFullGain() {
+        start(volume = 0.25f)
+
+        assertEquals(
+            1f,
+            shadowOf(createdPlayers.single()).leftVolume,
+            "Attenuating twice would leave a quarter-volume alarm barely audible",
+        )
+    }
+
+    @Test
+    @Config(shadows = [ShadowUnchangeableAudioManager::class])
+    fun start_whenTheDeviceRefusesTheOverride_turnsThePlayerDownInstead() {
+        val deviceVolume = deviceAlarmVolume
+
+        start(volume = 0.25f)
+
+        assertEquals(0.25f, shadowOf(createdPlayers.single()).leftVolume)
+        assertEquals(deviceVolume, deviceAlarmVolume, "Nothing moved, so nothing was overridden")
+        assertNull(repository.deviceAlarmVolume, "Nothing to put back either")
+    }
+
     /** The case that split notification, ringtone and vibration into separately guarded steps. */
     @Test
     fun start_whenEveryRingtoneFails_stillShowsAndVibrates() {
@@ -454,6 +492,12 @@ class AlarmServiceTest {
         return controller!!.get()
     }
 
+    private fun restartWithoutAnIntent(): AlarmService {
+        controller = Robolectric.buildService(AlarmService::class.java).create()
+        controller!!.startCommand(0, 0)
+        return controller!!.get()
+    }
+
     private fun stop() {
         controller!!
             .get()
@@ -463,4 +507,9 @@ class AlarmServiceTest {
                 1,
             )
     }
+}
+
+@Implements(AudioManager::class)
+class ShadowUnchangeableAudioManager : ShadowAudioManager() {
+    @Implementation override fun setStreamVolume(streamType: Int, index: Int, flags: Int) = Unit
 }

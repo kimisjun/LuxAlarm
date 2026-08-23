@@ -58,6 +58,7 @@ class FakeAlarmRepository : IAlarmRepository {
     var setRingingAlarmCallCount = 0
     var clearRingingAlarmCallCount = 0
     var deactivatedAlarmIds: List<Int>? = null
+    var deviceAlarmVolume: Int? = null
 
     fun setShouldSucceed(succeed: Boolean) {
         shouldSucceed = succeed
@@ -155,6 +156,16 @@ class FakeAlarmRepository : IAlarmRepository {
     override fun clearRingingAlarm() {
         clearRingingAlarmCallCount++
         isRinging = false
+    }
+
+    override fun rememberDeviceAlarmVolume(volume: Int) {
+        deviceAlarmVolume = volume
+    }
+
+    override fun rememberedDeviceAlarmVolume(): Int? = deviceAlarmVolume
+
+    override fun forgetDeviceAlarmVolume() {
+        deviceAlarmVolume = null
     }
 
     override suspend fun deactivateOneShotAlarms(ids: List<Int>) {
