@@ -1,0 +1,2 @@
+- Alarms now ring at the volume shown by their volume slider
+- Alarm volume stays consistent while ringing, then restores the device's previous setting
