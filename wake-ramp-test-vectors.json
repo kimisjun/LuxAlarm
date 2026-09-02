@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "curve": "smoothstep",
+  "defaults": {
+    "rampMinutes": 20,
+    "startVolume": 0.05,
+    "maxVolume": 0.35
+  },
+  "vectors": [
+    {
+      "progress": -0.25,
+      "clampedProgress": 0,
+      "easedProgress": 0.0,
+      "screenBrightness": 0.02,
+      "audioVolume": 0.05,
+      "hapticIntensity": 0.0,
+      "sunriseRGB": [
+        0.08,
+        0.025,
+        0.01
+      ]
+    },
+    {
+      "progress": 0,
+      "clampedProgress": 0,
+      "easedProgress": 0.0,
+      "screenBrightness": 0.02,
+      "audioVolume": 0.05,
+      "hapticIntensity": 0.0,
+      "sunriseRGB": [
+        0.08,
+        0.025,
+        0.01
+      ]
+    },
+    {
+      "progress": 0.25,
+      "clampedProgress": 0.25,
+      "easedProgress": 0.15625,
+      "screenBrightness": 0.173125,
+      "audioVolume": 0.096875,
+      "hapticIntensity": 0.0,
+      "sunriseRGB": [
+        0.22375,
+        0.142969,
+        0.083437
+      ]
+    },
+    {
+      "progress": 0.5,
+      "clampedProgress": 0.5,
+      "easedProgress": 0.5,
+      "screenBrightness": 0.51,
+      "audioVolume": 0.2,
+      "hapticIntensity": 0.0,
+      "sunriseRGB": [
+        0.54,
+        0.4025,
+        0.245
+      ]
+    },
+    {
+      "progress": 0.75,
+      "clampedProgress": 0.75,
+      "easedProgress": 0.84375,
+      "screenBrightness": 0.846875,
+      "audioVolume": 0.303125,
+      "hapticIntensity": 0.55,
+      "sunriseRGB": [
+        0.85625,
+        0.662031,
+        0.406562
+      ]
+    },
+    {
+      "progress": 1,
+      "clampedProgress": 1,
+      "easedProgress": 1.0,
+      "screenBrightness": 1.0,
+      "audioVolume": 0.35,
+      "hapticIntensity": 0.8,
+      "sunriseRGB": [
+        1.0,
+        0.78,
+        0.48
+      ]
+    },
+    {
+      "progress": 1.25,
+      "clampedProgress": 1,
+      "easedProgress": 1.0,
+      "screenBrightness": 1.0,
+      "audioVolume": 0.35,
+      "hapticIntensity": 0.8,
+      "sunriseRGB": [
+        1.0,
+        0.78,
+        0.48
+      ]
+    }
+  ]
+}
