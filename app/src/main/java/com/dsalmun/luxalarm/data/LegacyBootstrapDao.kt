@@ -6,6 +6,7 @@ package com.dsalmun.luxalarm.data
 
 import androidx.room.Dao
 import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 
 @Dao
@@ -32,6 +33,12 @@ internal interface LegacyBootstrapDao {
         targetStorageKey: String,
         attemptToken: String,
     ): MigrationStateEntity?
+
+    @Query("SELECT * FROM imported_track WHERE id = :id")
+    fun importedTrackById(id: String): ImportedTrackEntity?
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    fun insertImportedTrack(track: ImportedTrackEntity): Long
 
     @Query("SELECT COUNT(*) FROM legacy_migration_manifest WHERE user_confirmed = 1")
     fun confirmedManifestCount(): Int

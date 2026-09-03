@@ -28,6 +28,7 @@ internal enum class BootstrapPhase {
     DISCOVERED,
     COPIED,
     VALIDATED,
+    COMMITTED,
 }
 
 internal data class LegacyAudioBootstrapEvidence(

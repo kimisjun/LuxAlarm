@@ -118,9 +118,9 @@ internal class LegacyAudioBootstrapReconciler(
                 }
             }
             var durableMetadata = persistedMetadataEvidence?.metadata
-            if (phase == BootstrapPhase.VALIDATED) {
+            if (phase >= BootstrapPhase.VALIDATED) {
                 requireNotNull(durableMetadata) {
-                    "VALIDATED bootstrap phase is missing durable metadata evidence"
+                    "Advanced bootstrap phase is missing durable metadata evidence"
                 }
             } else if (durableMetadata == null) {
                 val metadata = decodeApprovedDestination(attempt, copy)

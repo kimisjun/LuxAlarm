@@ -322,7 +322,6 @@ class LegacyAudioBootstrapReconcilerTest {
                 valid.copy(targetStorageKey = "/absolute"),
                 valid.copy(targetStorageKey = "bootstrap/$token/../legacy-audio"),
                 valid.copy(bootstrapPhase = null),
-                valid.copy(bootstrapPhase = "COMMITTED"),
             )
 
         corrupt.forEach { evidence ->
@@ -791,6 +790,62 @@ class LegacyAudioBootstrapReconcilerTest {
     }
 
     @Test
+    fun committedMissingMetadataEvidenceFailsClosedWithoutRegeneration() {
+        val filesDir = createTempDirectory("legacy-bootstrap-committed-missing-metadata-").toFile()
+        val source = File(filesDir, "source.mp3").apply { writeText("audio") }
+        val descriptor = descriptor(source, BootstrapPhase.DISCOVERED)
+        val state = FakeStatePort(BootstrapPhase.DISCOVERED)
+        legacyAudioTestReconciler(filesDir, state, FakeDecoder(TEST_METADATA)).reconcile(descriptor)
+        state.phase = BootstrapPhase.COMMITTED
+        state.transitions.clear()
+        val attemptDir = File(filesDir, descriptor.targetStorageKey).parentFile
+        val metadataSidecar = File(attemptDir, "metadata.evidence")
+        assertTrue(metadataSidecar.delete())
+        val filesBefore = attemptDir.listFiles()!!.associate { it.name to it.readBytes() }
+        val decoder = FakeDecoder(AudioValidationMetadata("regenerated", null, 2, "audio/wrong"))
+
+        assertFailsWith<IllegalArgumentException> {
+            legacyAudioTestReconciler(filesDir, state, decoder).reconcile(descriptor)
+        }
+
+        assertEquals(BootstrapPhase.COMMITTED, state.phase)
+        assertTrue(state.transitions.isEmpty())
+        assertEquals(0, decoder.calls)
+        assertFalse(metadataSidecar.exists())
+        assertEquals(filesBefore.keys, attemptDir.listFiles()!!.map { it.name }.toSet())
+        filesBefore.forEach { (name, bytes) ->
+            assertContentEquals(bytes, File(attemptDir, name).readBytes(), name)
+        }
+    }
+
+    @Test
+    fun committedExactDurableEvidenceReturnsWithoutDecodeOrRewrite() {
+        val filesDir = createTempDirectory("legacy-bootstrap-committed-exact-").toFile()
+        val source = File(filesDir, "source.mp3").apply { writeText("audio") }
+        val descriptor = descriptor(source, BootstrapPhase.DISCOVERED)
+        val state = FakeStatePort(BootstrapPhase.DISCOVERED)
+        val expected =
+            legacyAudioTestReconciler(filesDir, state, FakeDecoder(TEST_METADATA))
+                .reconcile(descriptor)
+        state.phase = BootstrapPhase.COMMITTED
+        state.transitions.clear()
+        val attemptDir = File(filesDir, descriptor.targetStorageKey).parentFile
+        val filesBefore = attemptDir.listFiles()!!.associate { it.name to it.readBytes() }
+        val decoder = FakeDecoder(AudioValidationMetadata("wrong", null, 2, "audio/wrong"))
+
+        val actual = legacyAudioTestReconciler(filesDir, state, decoder).reconcile(descriptor)
+
+        assertEquals(expected, actual)
+        assertEquals(BootstrapPhase.COMMITTED, state.phase)
+        assertTrue(state.transitions.isEmpty())
+        assertEquals(0, decoder.calls)
+        assertEquals(filesBefore.keys, attemptDir.listFiles()!!.map { it.name }.toSet())
+        filesBefore.forEach { (name, bytes) ->
+            assertContentEquals(bytes, File(attemptDir, name).readBytes(), name)
+        }
+    }
+
+    @Test
     fun copiedMissingDestinationRejectsChangedSourceUsingDurableCopyEvidence() {
         val filesDir = createTempDirectory("legacy-bootstrap-changed-").toFile()
         val source = File(filesDir, "source.mp3").apply { writeText("approved audio") }
@@ -829,7 +884,7 @@ class LegacyAudioBootstrapReconcilerTest {
     }
 
     @Test
-    fun validatedMetadataEvidenceMustReferenceSameCopyDigest() {
+    fun committedMetadataEvidenceMustReferenceSameCopyDigest() {
         fun complete(
             filesDir: File,
             bytes: String,
@@ -852,6 +907,7 @@ class LegacyAudioBootstrapReconcilerTest {
                 .readBytes()
         val secondDir = createTempDirectory("legacy-bootstrap-meta-b-").toFile()
         val (_, secondDescriptor, secondState) = complete(secondDir, "audio B")
+        secondState.phase = BootstrapPhase.COMMITTED
         File(File(secondDir, secondDescriptor.targetStorageKey).parentFile, "metadata.evidence")
             .writeBytes(firstMetadata)
 
