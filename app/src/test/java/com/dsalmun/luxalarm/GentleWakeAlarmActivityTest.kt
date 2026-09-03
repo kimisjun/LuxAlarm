@@ -45,6 +45,7 @@ class GentleWakeAlarmActivityTest {
                             AlarmActivity::class.java,
                         )
                         .putExtra("alarm_id", 7)
+                        .putExtra("gentle_wake", true)
                         .putExtra("ramp_minutes", 1)
                 ),
             activityProvider = { rule ->

@@ -59,6 +59,7 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
     private var currentLightLevel by mutableFloatStateOf(0f)
     private var requiredLightLevel by mutableFloatStateOf(SettingsManager.DEFAULT_LUX_LEVEL)
     private var dismissal = WakeDismissal.DEFAULT
+    private var gentleWake = false
     private var rampMinutes = WakeRamp.DEFAULT_RAMP_MINUTES
     private var rampStartedAtElapsedRealtime = 0L
     private var gentleWakeProgress by mutableFloatStateOf(0f)
@@ -78,6 +79,7 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
         )
 
         alarmId = intent.getIntExtra("alarm_id", -1)
+        gentleWake = intent.getBooleanExtra("gentle_wake", false)
         dismissal =
             intent.getStringExtra("dismissal")?.let { stored ->
                 WakeDismissal.entries.firstOrNull { it.name == stored }
@@ -90,16 +92,17 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
                 SystemClock.elapsedRealtime()
             }
         setupScreenWake()
-        if (dismissal == WakeDismissal.LUX) {
+        if (!gentleWake || dismissal == WakeDismissal.LUX) {
             requiredLightLevel = AppContainer.settingsManager.getRequiredLuxLevel()
             setupLightSensor()
-        } else {
+        }
+        if (gentleWake) {
             startGentleWakeScreenRamp()
         }
 
         setContent {
             LuxAlarmTheme {
-                if (dismissal == WakeDismissal.LUX) {
+                if (!gentleWake) {
                     AlarmRingingScreen(
                         currentLightLevel = currentLightLevel,
                         requiredLightLevel = requiredLightLevel,
@@ -108,6 +111,9 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
                 } else {
                     GentleWakeRingingScreen(
                         progress = gentleWakeProgress,
+                        currentLightLevel = currentLightLevel,
+                        requiredLightLevel = requiredLightLevel,
+                        requiresLux = dismissal == WakeDismissal.LUX,
                         onAwake = { stopAlarm() },
                     )
                 }
@@ -134,7 +140,7 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
-        if (dismissal == WakeDismissal.LUX) {
+        if (!gentleWake || dismissal == WakeDismissal.LUX) {
             lightSensor?.let { sensor ->
                 sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
             }
@@ -143,7 +149,7 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
 
     override fun onPause() {
         super.onPause()
-        if (dismissal == WakeDismissal.LUX) sensorManager.unregisterListener(this)
+        if (!gentleWake || dismissal == WakeDismissal.LUX) sensorManager.unregisterListener(this)
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -221,6 +227,9 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
 @Composable
 fun GentleWakeRingingScreen(
     progress: Float,
+    currentLightLevel: Float = 0f,
+    requiredLightLevel: Float = SettingsManager.DEFAULT_LUX_LEVEL,
+    requiresLux: Boolean = false,
     onAwake: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -230,6 +239,7 @@ fun GentleWakeRingingScreen(
     val currentDate = remember {
         SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault()).format(Date())
     }
+    val canDismiss = !requiresLux || currentLightLevel >= requiredLightLevel
 
     Box(
         modifier =
@@ -266,9 +276,25 @@ fun GentleWakeRingingScreen(
                 fontWeight = FontWeight.Light,
                 textAlign = TextAlign.Center,
             )
+            if (requiresLux) {
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    text = "밝기 미션 · ${currentLightLevel.toInt()} / ${requiredLightLevel.toInt()} lux",
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = if (canDismiss) "충분히 밝아요" else "더 밝은 곳으로 이동해 주세요",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(56.dp))
             Button(
                 onClick = onAwake,
+                enabled = canDismiss,
                 modifier = Modifier.widthIn(min = 280.dp).heightIn(min = 72.dp),
                 shape = RoundedCornerShape(36.dp),
                 colors =
@@ -277,7 +303,11 @@ fun GentleWakeRingingScreen(
                         contentColor = Color(0xFF5A2508),
                     ),
             ) {
-                Text(text = "일어났어요", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (canDismiss) "일어났어요" else "밝은 곳으로 이동 중",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

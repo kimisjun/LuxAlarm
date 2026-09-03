@@ -168,6 +168,7 @@ class AlarmServiceTest {
         val notification = assertNotNull(shadowOf(service).lastForegroundNotification)
         val activityIntent = assertNotNull(shadowOf(notification.fullScreenIntent).savedIntent)
         assertEquals(ALARM_ID, activityIntent.getIntExtra("alarm_id", -1))
+        assertTrue(activityIntent.getBooleanExtra("gentle_wake", false))
         assertEquals(12, activityIntent.getIntExtra("ramp_minutes", -1))
         assertEquals(WakeDismissal.LUX.name, activityIntent.getStringExtra("dismissal"))
         assertTrue(activityIntent.hasExtra("ramp_started_elapsed_realtime"))

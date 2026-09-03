@@ -135,7 +135,12 @@ class AlarmService : Service() {
         independently {
             createNotificationChannel()
             val notification =
-                buildAlarmNotification(alarmId, wakeProfile, rampStartedAtElapsedRealtime)
+                buildAlarmNotification(
+                    alarmId,
+                    gentleWake,
+                    wakeProfile,
+                    rampStartedAtElapsedRealtime,
+                )
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     ALARM_NOTIFICATION_ID,
@@ -415,6 +420,7 @@ class AlarmService : Service() {
     @SuppressLint("FullScreenIntentPolicy")
     private fun buildAlarmNotification(
         alarmId: Int,
+        gentleWake: Boolean,
         wakeProfile: WakeProfile,
         rampStartedAtElapsedRealtime: Long,
     ): Notification {
@@ -422,6 +428,7 @@ class AlarmService : Service() {
             Intent(this, AlarmActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra("alarm_id", alarmId)
+                putExtra("gentle_wake", gentleWake)
                 putExtra("ramp_minutes", wakeProfile.rampMinutes)
                 putExtra("dismissal", wakeProfile.dismissal.name)
                 putExtra("ramp_started_elapsed_realtime", rampStartedAtElapsedRealtime)
