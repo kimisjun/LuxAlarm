@@ -63,6 +63,8 @@ abstract class AlarmDatabase : RoomDatabase() {
 
     internal abstract fun wakeEventDispatchDao(): WakeEventDispatchDao
 
+    internal abstract fun wakeRecoveryAnchorDao(): WakeRecoveryAnchorDao
+
     companion object {
         @Volatile private var Instance: AlarmDatabase? = null
         internal val MIGRATION_1_2 =
