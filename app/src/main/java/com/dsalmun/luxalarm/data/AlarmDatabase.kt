@@ -59,6 +59,8 @@ abstract class AlarmDatabase : RoomDatabase() {
 
     abstract fun wakeRunStorageDao(): WakeRunStorageDao
 
+    internal abstract fun legacyBootstrapDao(): LegacyBootstrapDao
+
     companion object {
         @Volatile private var Instance: AlarmDatabase? = null
         internal val MIGRATION_1_2 =

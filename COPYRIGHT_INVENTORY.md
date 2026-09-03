@@ -30,6 +30,7 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/schemas/legacy/v3-volume-vibration.sql` | `A` | GentleWake provenance fixture derived from Lux Alarm schema; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/schemas/legacy/v4-skipped-occurrence.sql` | `A` | GentleWake provenance fixture derived from Lux Alarm schema; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/androidTest/java/com/dsalmun/luxalarm/MigrationTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/androidTest/java/com/dsalmun/luxalarm/data/LegacyBootstrapAndroidTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/AlarmActivity.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/main/java/com/dsalmun/luxalarm/AlarmReceiver.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/main/java/com/dsalmun/luxalarm/AlarmScreen.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
@@ -43,6 +44,13 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/main/java/com/dsalmun/luxalarm/WakeDismissal.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/WakeRamp.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/AlarmDatabase.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/main/java/com/dsalmun/luxalarm/data/AlarmRepository.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/main/java/com/dsalmun/luxalarm/data/AlarmScheduling.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/main/java/com/dsalmun/luxalarm/data/CanonicalEncoder.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/data/LegacyAlarmPendingIntent.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/data/LegacyBootstrapDao.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/data/LegacyBootstrapMigrator.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/data/LegacySources.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/V6Entities.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/V6Migration.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/WakeRunStorageDao.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
@@ -67,7 +75,12 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/test/java/com/dsalmun/luxalarm/WakeAudioStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/WakeDismissalTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/WakeRampTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/AlarmRepositoryTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/test/java/com/dsalmun/luxalarm/data/CanonicalEncoderTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/LegacySchemaProvenanceContractTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/LegacyBootstrapMigratorTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/LegacySourcesTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/RoomLegacyDiscoveryStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/V6DatabaseContractTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/V6MigrationTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/WakeRunStorageDaoTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |

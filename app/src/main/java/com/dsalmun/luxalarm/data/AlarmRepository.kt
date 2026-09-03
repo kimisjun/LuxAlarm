@@ -1,5 +1,6 @@
 /*
  * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026 by 김은준.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +23,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.content.edit
-import com.dsalmun.luxalarm.AlarmReceiver
 import com.dsalmun.luxalarm.MainActivity
 import com.dsalmun.luxalarm.UpcomingAlarmNotifier
 import com.dsalmun.luxalarm.UpcomingAlarmReceiver
@@ -31,7 +31,6 @@ import kotlinx.coroutines.flow.Flow
 class AlarmRepository(private val alarmDao: AlarmDao, private val context: Context) :
     IAlarmRepository {
     private companion object {
-        const val NEXT_ALARM_REQUEST_CODE = 0
         const val UPCOMING_SHOW_REQUEST_CODE = 1
         const val PREFS_NAME = "alarm_state"
         const val KEY_IS_RINGING = "is_ringing"
@@ -193,19 +192,17 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
         val nextAlarm = nextAlarms.first().first
 
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent =
-            Intent(context, AlarmReceiver::class.java).apply {
-                putIntegerArrayListExtra("alarm_ids", ArrayList(alarmIds))
-                putExtra("ringtone_uri", nextAlarm.ringtoneUri)
-                putExtra("volume", nextAlarm.volume)
-                putExtra("vibration_enabled", nextAlarm.vibrationEnabled)
-            }
         val pendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                NEXT_ALARM_REQUEST_CODE,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            checkNotNull(
+                LEGACY_ALARM_PENDING_INTENT_SPEC.pendingIntent(
+                    context,
+                    PendingIntent.FLAG_UPDATE_CURRENT,
+                ) {
+                    putIntegerArrayListExtra("alarm_ids", ArrayList(alarmIds))
+                    putExtra("ringtone_uri", nextAlarm.ringtoneUri)
+                    putExtra("volume", nextAlarm.volume)
+                    putExtra("vibration_enabled", nextAlarm.vibrationEnabled)
+                }
             )
 
         val showIntent =
@@ -307,13 +304,11 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
     override suspend fun cancelV1Alarms() {
         if (prefs.getBoolean(KEY_V1_MIGRATED, false)) return
         for (id in alarmDao.getAllAlarmIds()) {
-            val intent = Intent(context, AlarmReceiver::class.java)
             val pendingIntent =
-                PendingIntent.getBroadcast(
+                LEGACY_ALARM_PENDING_INTENT_SPEC.pendingIntent(
                     context,
+                    PendingIntent.FLAG_NO_CREATE,
                     id,
-                    intent,
-                    PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
                 )
             pendingIntent?.cancel()
         }
@@ -331,13 +326,12 @@ class AlarmRepository(private val alarmDao: AlarmDao, private val context: Conte
 
     private fun cancelNextAlarm() {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(context, AlarmReceiver::class.java)
         val pendingIntent =
-            PendingIntent.getBroadcast(
-                context,
-                NEXT_ALARM_REQUEST_CODE,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            checkNotNull(
+                LEGACY_ALARM_PENDING_INTENT_SPEC.pendingIntent(
+                    context,
+                    PendingIntent.FLAG_UPDATE_CURRENT,
+                )
             )
         alarmManager.cancel(pendingIntent)
         cancelUpcomingNotification()

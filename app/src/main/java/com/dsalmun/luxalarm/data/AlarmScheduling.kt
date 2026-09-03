@@ -1,5 +1,6 @@
 /*
  * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026 by 김은준.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +20,7 @@ package com.dsalmun.luxalarm.data
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Calendar
+import java.util.TimeZone
 
 /** Lead time before an alarm at which the "upcoming alarm" notification appears. */
 const val UPCOMING_LEAD_MILLIS: Long = 2 * 60 * 60 * 1000L
@@ -42,8 +44,18 @@ fun nextTrigger(
     repeatDays: Set<Int>,
     nowMillis: Long,
     skipDay: Long? = null,
+): Long = nextTrigger(hour, minute, repeatDays, nowMillis, ZoneId.systemDefault(), skipDay)
+
+/** Process-global-time-zone-free scheduling variant for snapshots and deterministic tests. */
+internal fun nextTrigger(
+    hour: Int,
+    minute: Int,
+    repeatDays: Set<Int>,
+    nowMillis: Long,
+    zoneId: ZoneId,
+    skipDay: Long? = null,
 ): Long {
-    val now = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val now = Calendar.getInstance(TimeZone.getTimeZone(zoneId)).apply { timeInMillis = nowMillis }
 
     if (repeatDays.isEmpty()) {
         val alarmTime = now.atTime(hour, minute)
@@ -58,14 +70,17 @@ fun nextTrigger(
         if (candidate[Calendar.DAY_OF_WEEK] !in repeatDays) continue
 
         val triggerTime = candidate.atTime(hour, minute)
-        if (triggerTime.after(now) && localDayOf(triggerTime.timeInMillis) != skipDay) {
+        if (triggerTime.after(now) && localDayOf(triggerTime.timeInMillis, zoneId) != skipDay) {
             return triggerTime.timeInMillis
         }
     }
 
-    // Unreachable in practice: a non-empty repeatDays set always has an occurrence within 15 days.
+    // Preserve the legacy fallback for malformed, non-empty repeat-day sets.
     return now.atTime(hour, minute).apply { add(Calendar.WEEK_OF_YEAR, 1) }.timeInMillis
 }
+
+private fun localDayOf(millis: Long, zoneId: ZoneId): Long =
+    Instant.ofEpochMilli(millis).atZone(zoneId).toLocalDate().toEpochDay()
 
 private fun Calendar.atTime(hour: Int, minute: Int): Calendar =
     (clone() as Calendar).apply {

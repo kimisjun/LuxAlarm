@@ -17,11 +17,14 @@ import org.junit.Test
 
 class V6DatabaseContractTest {
     @Test
-    fun task2ModifiedUpstreamFilesRetainGentleWakeModificationNotice() {
+    fun modifiedUpstreamFilesRetainExactGentleWakeModificationNotice() {
         val root = repositoryRoot()
         listOf(
                 "app/src/main/java/com/dsalmun/luxalarm/data/AlarmDatabase.kt",
+                "app/src/main/java/com/dsalmun/luxalarm/data/AlarmRepository.kt",
+                "app/src/main/java/com/dsalmun/luxalarm/data/AlarmScheduling.kt",
                 "app/src/androidTest/java/com/dsalmun/luxalarm/MigrationTest.kt",
+                "app/src/test/java/com/dsalmun/luxalarm/data/AlarmRepositoryTest.kt",
             )
             .forEach { relativePath ->
                 val header = File(root, relativePath).readText().substringBefore("package ")
@@ -30,7 +33,7 @@ class V6DatabaseContractTest {
                     "$relativePath must retain upstream notice",
                 )
                 assertTrue(
-                    header.contains("Modified for GentleWake in 2026 by 김은준"),
+                    header.contains("Modified for GentleWake in 2026 by 김은준."),
                     "$relativePath must retain the complete GentleWake modification notice",
                 )
             }

@@ -1,5 +1,6 @@
 /*
  * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026 by 김은준.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +22,7 @@ import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import androidx.core.content.edit
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -72,6 +74,32 @@ class AlarmRepositoryTest {
     private lateinit var dao: AlarmDao
     private lateinit var repository: AlarmRepository
     private lateinit var alarmManager: AlarmManager
+
+    @Test
+    @Suppress("DEPRECATION") // ScheduledAlarm offers no accessor for `operation`.
+    fun scheduledAlarmUsesTheSharedLegacyPendingIntentIdentitySpec() {
+        val (hour, minute) = clockTimeIn(THIRTY_MINUTES)
+        insertAlarm(id = 1, hour = hour, minute = minute)
+
+        assertTrue(runBlocking { repository.scheduleNextAlarm() })
+
+        val operation = assertNotNull(scheduledAlarmClock()).operation
+        val actual = shadowOf(operation).savedIntent
+        val fromSpec = LEGACY_ALARM_PENDING_INTENT_SPEC.intent(context)
+        assertTrue(actual.filterEquals(fromSpec))
+        assertEquals(fromSpec.component, actual.component)
+        assertEquals(fromSpec.action, actual.action)
+        assertEquals(fromSpec.data, actual.data)
+        assertEquals(fromSpec.categories, actual.categories)
+        assertEquals(fromSpec.`package`, actual.`package`)
+        assertEquals("broadcast", LEGACY_ALARM_PENDING_INTENT_SPEC.kind)
+        assertEquals(0, LEGACY_ALARM_PENDING_INTENT_SPEC.requestCode)
+        assertEquals(LEGACY_ALARM_PENDING_INTENT_SPEC.requestCode, shadowOf(operation).requestCode)
+        assertEquals(legacyPendingIntentIdentity(), LEGACY_ALARM_PENDING_INTENT_SPEC.identity())
+        val expected =
+            Intent().setClassName(context.packageName, "com.dsalmun.luxalarm.AlarmReceiver")
+        assertTrue(fromSpec.filterEquals(expected))
+    }
 
     @Before
     fun setup() {
