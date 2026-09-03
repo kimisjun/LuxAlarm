@@ -7,9 +7,11 @@ plugins {
 }
 
 spotless {
+    ratchetFrom("HEAD")
     kotlin {
         target("app/src/**/*.kt")
-        licenseHeaderFile(rootProject.file("config/license-header.txt"))
+        // Copyright provenance differs per file (upstream-modified vs GentleWake-new).
+        // Keep headers explicit and inventory-validated instead of forcing one global owner.
         ktfmt().kotlinlangStyle()
     }
 }

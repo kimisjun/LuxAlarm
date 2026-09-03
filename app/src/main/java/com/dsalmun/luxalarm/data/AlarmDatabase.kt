@@ -1,6 +1,6 @@
 /*
  * This file is part of Lux Alarm, authored by Daniel Salmun.
- * Modified for GentleWake in 2026.
+ * Modified for GentleWake in 2026 by 김은준.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,10 +25,39 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [AlarmItem::class], version = 5, exportSchema = true)
+internal fun <T : Any> getOrCreateSingleton(
+    lock: Any,
+    current: () -> T?,
+    create: () -> T,
+    store: (T) -> Unit,
+): T = current() ?: synchronized(lock) { current() ?: create().also(store) }
+
+@Database(
+    entities =
+        [
+            AlarmItem::class,
+            WakeRoutineEntity::class,
+            ImportedTrackEntity::class,
+            WakeRunSnapshotEntity::class,
+            WakeRunStatusEntity::class,
+            WakeEventDispatchEntity::class,
+            WakeRecoveryAnchorEntity::class,
+            ScheduleOutboxEntity::class,
+            TrackLeaseEntity::class,
+            ScheduleOccurrenceClaimEntity::class,
+            LegacyMigrationManifestEntity::class,
+            LegacyCoordinatorStateEntity::class,
+            LegacyCoordinatorMemberEntity::class,
+            MigrationStateEntity::class,
+        ],
+    version = 6,
+    exportSchema = true,
+)
 @TypeConverters(Converters::class)
 abstract class AlarmDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao
+
+    abstract fun wakeRunStorageDao(): WakeRunStorageDao
 
     companion object {
         @Volatile private var Instance: AlarmDatabase? = null
@@ -94,14 +123,28 @@ abstract class AlarmDatabase : RoomDatabase() {
                 }
             }
 
-        fun getDatabase(context: Context): AlarmDatabase {
-            return Instance
-                ?: synchronized(this) {
-                    Room.databaseBuilder(context, AlarmDatabase::class.java, "alarm_database")
-                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
-                        .build()
-                        .also { Instance = it }
-                }
-        }
+        internal val MIGRATION_5_6 = MIGRATION_5_6_IMPLEMENTATION
+
+        internal fun databaseBuilder(
+            context: Context,
+            name: String,
+        ): RoomDatabase.Builder<AlarmDatabase> =
+            Room.databaseBuilder(context, AlarmDatabase::class.java, name)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                )
+                .addCallback(V6_NEW_DATABASE_CALLBACK)
+
+        fun getDatabase(context: Context): AlarmDatabase =
+            getOrCreateSingleton(
+                lock = this,
+                current = { Instance },
+                create = { databaseBuilder(context, "alarm_database").build() },
+                store = { Instance = it },
+            )
     }
 }

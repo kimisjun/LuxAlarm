@@ -1,6 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
- * for GentleWake in 2026.
+ * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026 by 김은준.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,9 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
 import androidx.test.platform.app.InstrumentationRegistry
@@ -29,6 +32,7 @@ import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_1_2
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_2_3
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_3_4
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_4_5
+import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_5_6
 import com.dsalmun.luxalarm.data.AlarmItem
 import kotlin.test.assertEquals
 import kotlin.test.assertFails
@@ -36,10 +40,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
-import org.json.JSONObject
 
 @MediumTest
 class MigrationTest {
@@ -70,7 +74,11 @@ class MigrationTest {
         dbPath.parentFile?.mkdirs()
         val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
         val sql =
-            InstrumentationRegistry.getInstrumentation().context.assets.open(assetPath).bufferedReader()
+            InstrumentationRegistry.getInstrumentation()
+                .context
+                .assets
+                .open(assetPath)
+                .bufferedReader()
                 .use { it.readText() }
                 .lineSequence()
                 .filterNot { it.trimStart().startsWith("--") }
@@ -187,43 +195,72 @@ class MigrationTest {
         db.close()
     }
 
-    private fun openCurrentV5Database(): AlarmDatabase =
+    private fun openCurrentV6Database(): AlarmDatabase =
         Room.databaseBuilder(context, AlarmDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(
+                MIGRATION_1_2,
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+            )
             .allowMainThreadQueries()
             .build()
 
     @Test
-    fun currentV5Schema_matchesCommittedRoomExport() {
+    fun migration4To5Output_matchesCommittedV5RoomExport() {
         val export =
-            InstrumentationRegistry.getInstrumentation().context.assets
+            InstrumentationRegistry.getInstrumentation()
+                .context
+                .assets
                 .open("com.dsalmun.luxalarm.data.AlarmDatabase/5.json")
                 .bufferedReader()
                 .use { JSONObject(it.readText()).getJSONObject("database") }
         val expectedSql =
-            export.getJSONArray("entities").getJSONObject(0).getString("createSql")
+            export
+                .getJSONArray("entities")
+                .getJSONObject(0)
+                .getString("createSql")
                 .replace("\${TABLE_NAME}", "alarms")
 
-        val db = openCurrentV5Database()
+        createV4Database(emptyList())
+        val helper =
+            FrameworkSQLiteOpenHelperFactory()
+                .create(
+                    SupportSQLiteOpenHelper.Configuration.builder(context)
+                        .name(dbName)
+                        .callback(
+                            object : SupportSQLiteOpenHelper.Callback(5) {
+                                override fun onCreate(db: SupportSQLiteDatabase) = Unit
+
+                                override fun onUpgrade(
+                                    db: SupportSQLiteDatabase,
+                                    oldVersion: Int,
+                                    newVersion: Int,
+                                ) {
+                                    assertEquals(4, oldVersion)
+                                    assertEquals(5, newVersion)
+                                    MIGRATION_4_5.migrate(db)
+                                }
+                            }
+                        )
+                        .build()
+                )
+        val frameworkDb = helper.writableDatabase
         try {
-            val sqlite = db.openHelper.writableDatabase
             val actualSql =
-                sqlite.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='alarms'")
+                frameworkDb
+                    .query("SELECT sql FROM sqlite_master WHERE type='table' AND name='alarms'")
                     .use { cursor ->
                         assertTrue(cursor.moveToFirst())
                         cursor.getString(0)
                     }
-            val actualIdentity =
-                sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use { cursor ->
-                    assertTrue(cursor.moveToFirst())
-                    cursor.getString(0)
-                }
 
-            assertEquals(export.getInt("version"), sqlite.version)
-            assertEquals(export.getString("identityHash"), actualIdentity)
+            assertEquals(5, export.getInt("version"))
+            assertEquals(5, frameworkDb.version)
             assertEquals(normalizeCreateSql(expectedSql), normalizeCreateSql(actualSql))
         } finally {
-            db.close()
+            helper.close()
         }
     }
 
@@ -243,7 +280,7 @@ class MigrationTest {
             )
         createV1Database(v1Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(2, alarms.size)
@@ -272,7 +309,7 @@ class MigrationTest {
             listOf(V1Alarm(id = 1, hour = 6, minute = 0, isActive = true, repeatDays = ""))
         createV1Database(v1Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val dao = db.alarmDao()
             runBlocking {
@@ -319,7 +356,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(2, alarms.size)
@@ -346,7 +383,7 @@ class MigrationTest {
     fun legacyRingingStateV2_hasNoSafeAutomaticMigration() {
         createLegacyRingingStateV2Database()
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val failure = assertFails { db.openHelper.writableDatabase }
             assertTrue(
@@ -373,7 +410,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, volume = 0.5f)) }
@@ -408,7 +445,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, vibrationEnabled = false)) }
@@ -445,7 +482,7 @@ class MigrationTest {
             )
         createV3Database(v3Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(1, alarms.size)
@@ -477,7 +514,7 @@ class MigrationTest {
             )
         createV3Database(v3Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val dao = db.alarmDao()
             runBlocking {
@@ -515,7 +552,7 @@ class MigrationTest {
             )
         createV4Database(v4Alarms)
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
             assertEquals(1f, alarm.volume, "A slider drawn at full has to start ringing at full")
@@ -550,7 +587,7 @@ class MigrationTest {
             )
         )
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
             assertEquals(0.25f, alarm.volume)
@@ -579,7 +616,7 @@ class MigrationTest {
             )
         )
 
-        val db = openCurrentV5Database()
+        val db = openCurrentV6Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, volume = 0.5f)) }

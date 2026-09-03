@@ -1,0 +1,1268 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 6,
+    "identityHash": "32b132473f0cc8060e8c36862b00df54",
+    "entities": [
+      {
+        "tableName": "alarms",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `hour` INTEGER NOT NULL, `minute` INTEGER NOT NULL, `isActive` INTEGER NOT NULL, `repeatDays` TEXT NOT NULL, `ringtoneUri` TEXT, `volume` REAL NOT NULL, `vibrationEnabled` INTEGER NOT NULL, `skippedOccurrenceDay` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hour",
+            "columnName": "hour",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "minute",
+            "columnName": "minute",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isActive",
+            "columnName": "isActive",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repeatDays",
+            "columnName": "repeatDays",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ringtoneUri",
+            "columnName": "ringtoneUri",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "volume",
+            "columnName": "volume",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationEnabled",
+            "columnName": "vibrationEnabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "skippedOccurrenceDay",
+            "columnName": "skippedOccurrenceDay",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "wake_routine",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `enabled` INTEGER NOT NULL DEFAULT 0, `goal_minute_of_day` INTEGER NOT NULL, `repeat_days_mask` INTEGER NOT NULL, `zone_id` TEXT NOT NULL, `preset_selection` TEXT NOT NULL, `preset_base` TEXT NOT NULL, `light_enabled` INTEGER NOT NULL, `light_offset_min` INTEGER NOT NULL, `light_start` REAL NOT NULL, `light_target` REAL NOT NULL, `light_curve` TEXT NOT NULL, `music_enabled` INTEGER NOT NULL, `music_offset_min` INTEGER NOT NULL, `music_start` REAL NOT NULL, `music_target` REAL NOT NULL, `music_curve` TEXT NOT NULL, `vibration_enabled` INTEGER NOT NULL, `vibration_offset_min` INTEGER NOT NULL, `vibration_start` REAL NOT NULL, `vibration_target` REAL NOT NULL, `vibration_curve` TEXT NOT NULL, `selected_track_id` TEXT, `dismissal` TEXT NOT NULL, `revision` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`selected_track_id`) REFERENCES `imported_track`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "enabled",
+            "columnName": "enabled",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "goalMinuteOfDay",
+            "columnName": "goal_minute_of_day",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "repeatDaysMask",
+            "columnName": "repeat_days_mask",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "zoneId",
+            "columnName": "zone_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "presetSelection",
+            "columnName": "preset_selection",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "presetBase",
+            "columnName": "preset_base",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightEnabled",
+            "columnName": "light_enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightOffsetMin",
+            "columnName": "light_offset_min",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightStart",
+            "columnName": "light_start",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightTarget",
+            "columnName": "light_target",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightCurve",
+            "columnName": "light_curve",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicEnabled",
+            "columnName": "music_enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicOffsetMin",
+            "columnName": "music_offset_min",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicStart",
+            "columnName": "music_start",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicTarget",
+            "columnName": "music_target",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicCurve",
+            "columnName": "music_curve",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationEnabled",
+            "columnName": "vibration_enabled",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationOffsetMin",
+            "columnName": "vibration_offset_min",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationStart",
+            "columnName": "vibration_start",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationTarget",
+            "columnName": "vibration_target",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationCurve",
+            "columnName": "vibration_curve",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectedTrackId",
+            "columnName": "selected_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dismissal",
+            "columnName": "dismissal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "imported_track",
+            "onDelete": "SET NULL",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "selected_track_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "imported_track",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `storage_key` TEXT NOT NULL, `title` TEXT NOT NULL, `artist` TEXT, `duration_ms` INTEGER NOT NULL, `mime_type` TEXT NOT NULL, `content_hash` TEXT NOT NULL, `lifecycle_state` TEXT NOT NULL, `availability` TEXT NOT NULL, `deletion_token` TEXT, `ref_count_cache` INTEGER NOT NULL DEFAULT 0, `added_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageKey",
+            "columnName": "storage_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artist",
+            "columnName": "artist",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "durationMs",
+            "columnName": "duration_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mime_type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lifecycleState",
+            "columnName": "lifecycle_state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "availability",
+            "columnName": "availability",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deletionToken",
+            "columnName": "deletion_token",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "refCountCache",
+            "columnName": "ref_count_cache",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "addedAt",
+            "columnName": "added_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_track_lifecycle",
+            "unique": false,
+            "columnNames": [
+              "lifecycle_state"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_track_lifecycle` ON `${TABLE_NAME}` (`lifecycle_state`)"
+          },
+          {
+            "name": "uq_track_live_hash",
+            "unique": true,
+            "columnNames": [
+              "content_hash"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `uq_track_live_hash` ON `${TABLE_NAME}` (`content_hash`)"
+          }
+        ]
+      },
+      {
+        "tableName": "wake_run_snapshot",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `occurrence_id` TEXT NOT NULL, `schedule_generation` INTEGER NOT NULL, `routine_revision` INTEGER NOT NULL, `calculation_rule_version` INTEGER NOT NULL, `zone_id` TEXT NOT NULL, `occurrence_local_date` TEXT NOT NULL, `wake_start_epoch_ms` INTEGER NOT NULL, `goal_epoch_ms` INTEGER NOT NULL, `light_payload` TEXT NOT NULL, `music_payload` TEXT NOT NULL, `vibration_payload` TEXT NOT NULL, `selected_track_id` TEXT, `selected_track_storage_key` TEXT, `dismissal` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `install_epoch` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`selected_track_id`) REFERENCES `imported_track`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurrenceId",
+            "columnName": "occurrence_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scheduleGeneration",
+            "columnName": "schedule_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "routineRevision",
+            "columnName": "routine_revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "calculationRuleVersion",
+            "columnName": "calculation_rule_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "zoneId",
+            "columnName": "zone_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "occurrenceLocalDate",
+            "columnName": "occurrence_local_date",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "wakeStartEpochMs",
+            "columnName": "wake_start_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "goalEpochMs",
+            "columnName": "goal_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lightPayload",
+            "columnName": "light_payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "musicPayload",
+            "columnName": "music_payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "vibrationPayload",
+            "columnName": "vibration_payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "selectedTrackId",
+            "columnName": "selected_track_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "selectedTrackStorageKey",
+            "columnName": "selected_track_storage_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "dismissal",
+            "columnName": "dismissal",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "installEpoch",
+            "columnName": "install_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_snapshot_generation",
+            "unique": false,
+            "columnNames": [
+              "schedule_generation"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_snapshot_generation` ON `${TABLE_NAME}` (`schedule_generation`)"
+          },
+          {
+            "name": "idx_snapshot_goal",
+            "unique": false,
+            "columnNames": [
+              "goal_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_snapshot_goal` ON `${TABLE_NAME}` (`goal_epoch_ms`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "imported_track",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "selected_track_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "wake_run_status",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`snapshot_id` TEXT NOT NULL, `state` TEXT NOT NULL, `processed_start_at` INTEGER, `processed_goal_at` INTEGER, `active_service_owner_token` TEXT, `execution_epoch` INTEGER NOT NULL DEFAULT 0, `service_lease_owner` TEXT, `service_lease_expires_at` INTEGER, `heartbeat_at` INTEGER, `armed_start` INTEGER NOT NULL DEFAULT 0, `armed_goal` INTEGER NOT NULL DEFAULT 0, `started_at` INTEGER, `completed_at` INTEGER, `cancelled_at` INTEGER, `failure_reason` TEXT, PRIMARY KEY(`snapshot_id`), FOREIGN KEY(`snapshot_id`) REFERENCES `wake_run_snapshot`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "snapshotId",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "processedStartAt",
+            "columnName": "processed_start_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "processedGoalAt",
+            "columnName": "processed_goal_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "activeServiceOwnerToken",
+            "columnName": "active_service_owner_token",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "executionEpoch",
+            "columnName": "execution_epoch",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "serviceLeaseOwner",
+            "columnName": "service_lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "serviceLeaseExpiresAt",
+            "columnName": "service_lease_expires_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "heartbeatAt",
+            "columnName": "heartbeat_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "armedStart",
+            "columnName": "armed_start",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "armedGoal",
+            "columnName": "armed_goal",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "started_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "completedAt",
+            "columnName": "completed_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "cancelledAt",
+            "columnName": "cancelled_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failure_reason",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "snapshot_id"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "wake_run_snapshot",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "snapshot_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "wake_event_dispatch",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_key` TEXT NOT NULL, `snapshot_id` TEXT NOT NULL, `event_kind` TEXT NOT NULL, `expected_trigger_epoch_ms` INTEGER NOT NULL, `state` TEXT NOT NULL, `dispatch_attempt_id` INTEGER NOT NULL DEFAULT 0, `lease_owner` TEXT, `lease_expires_at` INTEGER, `attempt_count` INTEGER NOT NULL DEFAULT 0, `last_attempt_at` INTEGER, `failure_reason` TEXT, `armed_primary` INTEGER NOT NULL DEFAULT 0, `recovery_slot_a_at` INTEGER, `recovery_slot_a_state` TEXT NOT NULL DEFAULT 'CONSUMED', `recovery_slot_a_token` INTEGER NOT NULL DEFAULT 0, `recovery_slot_b_at` INTEGER, `recovery_slot_b_state` TEXT NOT NULL DEFAULT 'CONSUMED', `recovery_slot_b_token` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`event_key`), FOREIGN KEY(`snapshot_id`) REFERENCES `wake_run_snapshot`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "eventKey",
+            "columnName": "event_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "snapshotId",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventKind",
+            "columnName": "event_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedTriggerEpochMs",
+            "columnName": "expected_trigger_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dispatchAttemptId",
+            "columnName": "dispatch_attempt_id",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "leaseOwner",
+            "columnName": "lease_owner",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "leaseExpiresAt",
+            "columnName": "lease_expires_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lastAttemptAt",
+            "columnName": "last_attempt_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failure_reason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "armedPrimary",
+            "columnName": "armed_primary",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "recoverySlotAAt",
+            "columnName": "recovery_slot_a_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recoverySlotAState",
+            "columnName": "recovery_slot_a_state",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'CONSUMED'"
+          },
+          {
+            "fieldPath": "recoverySlotAToken",
+            "columnName": "recovery_slot_a_token",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "recoverySlotBAt",
+            "columnName": "recovery_slot_b_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "recoverySlotBState",
+            "columnName": "recovery_slot_b_state",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'CONSUMED'"
+          },
+          {
+            "fieldPath": "recoverySlotBToken",
+            "columnName": "recovery_slot_b_token",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_dispatch_due",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "recovery_slot_a_at",
+              "recovery_slot_b_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_dispatch_due` ON `${TABLE_NAME}` (`state`, `recovery_slot_a_at`, `recovery_slot_b_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "wake_run_snapshot",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "snapshot_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "wake_recovery_anchor",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`event_key` TEXT NOT NULL, `anchor_kind` TEXT NOT NULL, `trigger_epoch_ms` INTEGER NOT NULL, `state` TEXT NOT NULL, `pending_intent_identity` TEXT NOT NULL, PRIMARY KEY(`event_key`, `anchor_kind`), FOREIGN KEY(`event_key`) REFERENCES `wake_event_dispatch`(`event_key`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "eventKey",
+            "columnName": "event_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "anchorKind",
+            "columnName": "anchor_kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "triggerEpochMs",
+            "columnName": "trigger_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingIntentIdentity",
+            "columnName": "pending_intent_identity",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "event_key",
+            "anchor_kind"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_anchor_due",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "trigger_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_anchor_due` ON `${TABLE_NAME}` (`state`, `trigger_epoch_ms`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "wake_event_dispatch",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "event_key"
+            ],
+            "referencedColumns": [
+              "event_key"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "schedule_outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `generation` INTEGER NOT NULL, `command` TEXT NOT NULL, `event_key` TEXT, `state` TEXT NOT NULL, `attempt_count` INTEGER NOT NULL DEFAULT 0, `not_before_epoch_ms` INTEGER NOT NULL, `created_at` INTEGER NOT NULL, `last_error` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`event_key`) REFERENCES `wake_event_dispatch`(`event_key`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generation",
+            "columnName": "generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "command",
+            "columnName": "command",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventKey",
+            "columnName": "event_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attempt_count",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "notBeforeEpochMs",
+            "columnName": "not_before_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "last_error",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_outbox_pending",
+            "unique": false,
+            "columnNames": [
+              "state",
+              "not_before_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_outbox_pending` ON `${TABLE_NAME}` (`state`, `not_before_epoch_ms`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "wake_event_dispatch",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "event_key"
+            ],
+            "referencedColumns": [
+              "event_key"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "track_lease",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`snapshot_id` TEXT NOT NULL, `track_id` TEXT NOT NULL, `acquired_at` INTEGER NOT NULL, PRIMARY KEY(`snapshot_id`, `track_id`), FOREIGN KEY(`snapshot_id`) REFERENCES `wake_run_snapshot`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`track_id`) REFERENCES `imported_track`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "snapshotId",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "trackId",
+            "columnName": "track_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "acquiredAt",
+            "columnName": "acquired_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "snapshot_id",
+            "track_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_track_lease_track",
+            "unique": false,
+            "columnNames": [
+              "track_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_track_lease_track` ON `${TABLE_NAME}` (`track_id`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "wake_run_snapshot",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "snapshot_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "imported_track",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "track_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "schedule_occurrence_claim",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`canonical_occurrence_key` TEXT NOT NULL, `legacy_alarm_id` INTEGER, `goal_epoch_ms` INTEGER NOT NULL, `owner` TEXT NOT NULL, `state` TEXT NOT NULL, `fence_token` INTEGER NOT NULL DEFAULT 0, `claimed_by` TEXT, `claimed_at` INTEGER, PRIMARY KEY(`canonical_occurrence_key`))",
+        "fields": [
+          {
+            "fieldPath": "canonicalOccurrenceKey",
+            "columnName": "canonical_occurrence_key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legacyAlarmId",
+            "columnName": "legacy_alarm_id",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "goalEpochMs",
+            "columnName": "goal_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "owner",
+            "columnName": "owner",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "fenceToken",
+            "columnName": "fence_token",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "claimedBy",
+            "columnName": "claimed_by",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "claimedAt",
+            "columnName": "claimed_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "canonical_occurrence_key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_occurrence_goal",
+            "unique": false,
+            "columnNames": [
+              "goal_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_occurrence_goal` ON `${TABLE_NAME}` (`goal_epoch_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "legacy_migration_manifest",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`legacy_alarm_id` INTEGER NOT NULL, `goal_epoch_ms` INTEGER NOT NULL, `pending_intent_identity` TEXT NOT NULL, `proposed_disposition` TEXT NOT NULL, `user_confirmed` INTEGER NOT NULL DEFAULT 0, `terminal_at` INTEGER, PRIMARY KEY(`legacy_alarm_id`, `goal_epoch_ms`))",
+        "fields": [
+          {
+            "fieldPath": "legacyAlarmId",
+            "columnName": "legacy_alarm_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "goalEpochMs",
+            "columnName": "goal_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingIntentIdentity",
+            "columnName": "pending_intent_identity",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "proposedDisposition",
+            "columnName": "proposed_disposition",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userConfirmed",
+            "columnName": "user_confirmed",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "terminalAt",
+            "columnName": "terminal_at",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "legacy_alarm_id",
+            "goal_epoch_ms"
+          ]
+        }
+      },
+      {
+        "tableName": "legacy_coordinator_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `token_generation` INTEGER NOT NULL DEFAULT 0, `scheduled_goal_epoch_ms` INTEGER, `pending_intent_identity` TEXT, `state` TEXT NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tokenGeneration",
+            "columnName": "token_generation",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "scheduledGoalEpochMs",
+            "columnName": "scheduled_goal_epoch_ms",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pendingIntentIdentity",
+            "columnName": "pending_intent_identity",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "legacy_coordinator_member",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`token_generation` INTEGER NOT NULL, `legacy_alarm_id` INTEGER NOT NULL, `goal_epoch_ms` INTEGER NOT NULL, PRIMARY KEY(`token_generation`, `legacy_alarm_id`, `goal_epoch_ms`))",
+        "fields": [
+          {
+            "fieldPath": "tokenGeneration",
+            "columnName": "token_generation",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legacyAlarmId",
+            "columnName": "legacy_alarm_id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "goalEpochMs",
+            "columnName": "goal_epoch_ms",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "token_generation",
+            "legacy_alarm_id",
+            "goal_epoch_ms"
+          ]
+        },
+        "indices": [
+          {
+            "name": "idx_legacy_member_goal",
+            "unique": false,
+            "columnNames": [
+              "token_generation",
+              "goal_epoch_ms"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `idx_legacy_member_goal` ON `${TABLE_NAME}` (`token_generation`, `goal_epoch_ms`)"
+          }
+        ]
+      },
+      {
+        "tableName": "migration_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `schedule_owner` TEXT NOT NULL, `active_generation` INTEGER, `bootstrap_version` INTEGER NOT NULL DEFAULT 0, `rollback_allowed_until_version` INTEGER NOT NULL DEFAULT 16, `handoff_fence_occurrence_id` TEXT, `install_epoch` TEXT NOT NULL, `source_fingerprint` TEXT, `target_storage_key` TEXT, `bootstrap_phase` TEXT, `attempt_token` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "scheduleOwner",
+            "columnName": "schedule_owner",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "activeGeneration",
+            "columnName": "active_generation",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "bootstrapVersion",
+            "columnName": "bootstrap_version",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "rollbackAllowedUntilVersion",
+            "columnName": "rollback_allowed_until_version",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "16"
+          },
+          {
+            "fieldPath": "handoffFenceOccurrenceId",
+            "columnName": "handoff_fence_occurrence_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "installEpoch",
+            "columnName": "install_epoch",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceFingerprint",
+            "columnName": "source_fingerprint",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "targetStorageKey",
+            "columnName": "target_storage_key",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "bootstrapPhase",
+            "columnName": "bootstrap_phase",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "attemptToken",
+            "columnName": "attempt_token",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '32b132473f0cc8060e8c36862b00df54')"
+    ]
+  }
+}
