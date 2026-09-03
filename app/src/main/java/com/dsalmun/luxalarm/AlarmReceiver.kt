@@ -19,7 +19,9 @@ package com.dsalmun.luxalarm
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import androidx.core.content.ContextCompat
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -27,7 +29,7 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val alarmIds = intent?.getIntegerArrayListExtra("alarm_ids") ?: arrayListOf()
         val alarmId = alarmIds.firstOrNull() ?: -1
-        val ringtoneUri = intent?.getStringExtra("ringtone_uri")
+        val ringtoneUri = resolveWakeRingtone(intent?.getStringExtra("ringtone_uri"))
         val volume = intent?.getFloatExtra("volume", 1f) ?: 1f
         val vibrationEnabled = intent?.getBooleanExtra("vibration_enabled", true) ?: true
 
@@ -51,5 +53,11 @@ class AlarmReceiver : BroadcastReceiver() {
                 pendingResult.finish()
             }
         }
+    }
+
+    private fun resolveWakeRingtone(fallbackRingtoneUri: String?): String? {
+        val importedPath = AppContainer.settingsManager.getWakeProfile().importedAudioPath
+        val importedFile = importedPath?.let(::File)?.takeIf { it.isFile }
+        return importedFile?.let(Uri::fromFile)?.toString() ?: fallbackRingtoneUri
     }
 }

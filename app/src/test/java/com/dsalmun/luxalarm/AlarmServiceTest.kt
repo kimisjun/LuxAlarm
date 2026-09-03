@@ -34,6 +34,7 @@ import android.provider.Settings
 import androidx.core.net.toUri
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
+import java.io.File
 import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -242,6 +243,27 @@ class AlarmServiceTest {
         val player = createdPlayers.single()
         assertEquals(CUSTOM_RINGTONE.toUri(), shadowOf(player).sourceUri)
         assertTrue(player.isLooping, "An alarm must keep ringing until it is dismissed")
+        assertTrue(player.isPlaying)
+    }
+
+    @Test
+    fun start_withAnAppPrivateImportedFileUri_playsTheFileWithoutFallingBack() {
+        val importedFile =
+            File(context.filesDir, "gentle-wake-audio/selected-audio").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3, 4))
+            }
+        val importedUri = Uri.fromFile(importedFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, importedUri),
+            ShadowMediaPlayer.MediaInfo(5_000, 0),
+        )
+
+        start(ringtoneUri = importedUri.toString())
+
+        val player = createdPlayers.single()
+        assertEquals(importedUri, shadowOf(player).sourceUri)
+        assertTrue(player.isLooping)
         assertTrue(player.isPlaying)
     }
 

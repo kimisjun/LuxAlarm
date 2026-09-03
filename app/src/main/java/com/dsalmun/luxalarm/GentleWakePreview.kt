@@ -52,6 +52,7 @@ fun GentleWakePreview(
     onProgressChange: (Float) -> Unit = {},
     onAwake: () -> Unit,
     modifier: Modifier = Modifier,
+    playbackStatus: String? = null,
 ) {
     val frame = WakeRamp.frameAt(progress)
     val sunrise = Color(frame.sunriseRgb[0], frame.sunriseRgb[1], frame.sunriseRgb[2])
@@ -93,6 +94,15 @@ fun GentleWakePreview(
                 color = Color.White.copy(alpha = 0.84f),
                 fontSize = 14.sp,
             )
+            if (playbackStatus != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = playbackStatus,
+                    color = Color.White.copy(alpha = 0.84f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Slider(
                 value = frame.clampedProgress,
                 onValueChange = onProgressChange,

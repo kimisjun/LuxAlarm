@@ -19,9 +19,11 @@ package com.dsalmun.luxalarm
 import android.app.Application
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
+import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -69,6 +71,22 @@ class AlarmReceiverTest {
         assertEquals(RINGTONE, started.getStringExtra("ringtone_uri"))
         assertEquals(0.4f, started.getFloatExtra("volume", -1f))
         assertFalse(started.getBooleanExtra("vibration_enabled", true))
+    }
+
+    @Test
+    fun importedWakeMusicOverridesTheLegacyPerAlarmRingtoneAtFireTime() {
+        val imported = File(context.filesDir, "gentle-wake-audio/selected-audio").apply {
+            parentFile!!.mkdirs()
+            writeBytes(byteArrayOf(1, 2, 3, 4))
+        }
+        appContainer.settingsManager.updateWakeProfile(
+            appContainer.settingsManager.getWakeProfile().copy(importedAudioPath = imported.path)
+        )
+
+        sendAlarmBroadcast(alarmIntent())
+
+        val started = assertNotNull(nextStartedService())
+        assertEquals(Uri.fromFile(imported).toString(), started.getStringExtra("ringtone_uri"))
     }
 
     /** The receiver still has to reschedule, or the second alarm of the pair kills the chain. */

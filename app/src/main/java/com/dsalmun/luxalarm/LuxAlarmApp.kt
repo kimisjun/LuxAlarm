@@ -41,7 +41,7 @@ fun LuxAlarmApp() {
         showGentleWakePreview = false
     }
     if (showGentleWakePreview) {
-        GentleWakePreview(
+        GentleWakePreviewRoute(
             progress = previewProgress,
             onProgressChange = { previewProgress = it },
             onAwake = { showGentleWakePreview = false },
