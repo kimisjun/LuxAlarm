@@ -15,6 +15,24 @@ internal interface LegacyBootstrapDao {
 
     @Query("SELECT * FROM migration_state WHERE id = 1") fun migrationState(): MigrationStateEntity?
 
+    @Query(
+        """
+        SELECT * FROM migration_state
+        WHERE id = 1
+          AND schedule_owner = 'LEGACY'
+          AND install_epoch = :installEpoch
+          AND source_fingerprint = :fingerprint
+          AND target_storage_key = :targetStorageKey
+          AND attempt_token = :attemptToken
+        """
+    )
+    fun exactLegacyAudioBootstrapState(
+        installEpoch: String,
+        fingerprint: String,
+        targetStorageKey: String,
+        attemptToken: String,
+    ): MigrationStateEntity?
+
     @Query("SELECT COUNT(*) FROM legacy_migration_manifest WHERE user_confirmed = 1")
     fun confirmedManifestCount(): Int
 
@@ -28,6 +46,28 @@ internal interface LegacyBootstrapDao {
     @Query("DELETE FROM legacy_migration_manifest") fun deleteManifest()
 
     @Insert fun insertManifest(rows: List<LegacyMigrationManifestEntity>)
+
+    @Query(
+        """
+        UPDATE migration_state
+        SET bootstrap_phase = :nextPhase
+        WHERE id = 1
+          AND schedule_owner = 'LEGACY'
+          AND install_epoch = :installEpoch
+          AND source_fingerprint = :fingerprint
+          AND target_storage_key = :targetStorageKey
+          AND attempt_token = :attemptToken
+          AND bootstrap_phase = :expectedPhase
+        """
+    )
+    fun compareAndSetAudioBootstrapPhase(
+        installEpoch: String,
+        fingerprint: String,
+        targetStorageKey: String,
+        attemptToken: String,
+        expectedPhase: String,
+        nextPhase: String,
+    ): Int
 
     @Query(
         """
@@ -170,5 +210,72 @@ internal class RoomLegacyDiscoveryStore(
                 "Failed to update migration_state"
             }
         }
+    }
+}
+
+internal fun MigrationStateEntity.toLegacyAudioBootstrapEvidence() =
+    LegacyAudioBootstrapEvidence(
+        scheduleOwner = scheduleOwner,
+        installEpoch = installEpoch,
+        sourceFingerprint = sourceFingerprint,
+        attemptToken = attemptToken,
+        targetStorageKey = targetStorageKey,
+        bootstrapPhase = bootstrapPhase,
+    )
+
+/** Room CAS adapter; copy hashes remain transient until Task 3B2 atomically commits a track. */
+internal class RoomLegacyAudioBootstrapStatePort(private val database: AlarmDatabase) :
+    LegacyAudioBootstrapStatePort {
+    override fun loadCurrent(
+        descriptor: LegacyAudioBootstrapDescriptor
+    ): LegacyAudioBootstrapEvidence =
+        requireNotNull(
+                database
+                    .legacyBootstrapDao()
+                    .exactLegacyAudioBootstrapState(
+                        descriptor.installEpoch,
+                        descriptor.sourceFingerprint,
+                        descriptor.targetStorageKey,
+                        descriptor.attemptToken,
+                    )
+            ) {
+                "No current LEGACY bootstrap evidence matches descriptor identity"
+            }
+            .toLegacyAudioBootstrapEvidence()
+
+    override fun compareAndSetPhase(
+        descriptor: LegacyAudioBootstrapDescriptor,
+        expected: BootstrapPhase,
+        next: BootstrapPhase,
+        copyEvidence: LegacyAudioCopyEvidence,
+    ): PhaseCasOutcome {
+        require(
+            (expected == BootstrapPhase.DISCOVERED && next == BootstrapPhase.COPIED) ||
+                (expected == BootstrapPhase.COPIED && next == BootstrapPhase.VALIDATED)
+        ) {
+            "Only 3B1 forward phase transitions are allowed"
+        }
+        require(copyEvidence.storageKey == descriptor.targetStorageKey) {
+            "Copy evidence storage key conflict"
+        }
+        require(copyEvidence.sha256.matches(Regex("[0-9a-f]{64}")) && copyEvidence.sizeBytes > 0) {
+            "Invalid copy evidence"
+        }
+        val changed =
+            database
+                .legacyBootstrapDao()
+                .compareAndSetAudioBootstrapPhase(
+                    descriptor.installEpoch,
+                    descriptor.sourceFingerprint,
+                    descriptor.targetStorageKey,
+                    descriptor.attemptToken,
+                    expected.name,
+                    next.name,
+                ) == 1
+        if (changed) return PhaseCasOutcome.ADVANCED
+        val current =
+            runCatching { loadCurrent(descriptor) }.getOrNull() ?: return PhaseCasOutcome.REJECTED
+        val phase = BootstrapPhase.valueOf(requireNotNull(current.bootstrapPhase))
+        return if (phase >= next) PhaseCasOutcome.ALREADY_AT_OR_BEYOND else PhaseCasOutcome.REJECTED
     }
 }

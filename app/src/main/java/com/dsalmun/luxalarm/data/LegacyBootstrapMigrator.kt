@@ -86,6 +86,11 @@ internal data class LegacyDiscoveryResult(
     val targetStorageKey: String?,
 )
 
+internal data class LegacyCanonicalDiscoverySnapshot(
+    val persistence: LegacyDiscoveryPersistence,
+    val wakeProfileProposal: LegacyWakeProfileProposal,
+)
+
 /**
  * Runs only after Room is open; discovery never schedules, activates, copies, or mutates legacy
  * data.
@@ -97,11 +102,6 @@ internal class LegacyBootstrapMigrator(
     private val nowMillis: () -> Long,
     private val zoneId: ZoneId,
 ) {
-    private data class Snapshot(
-        val persistence: LegacyDiscoveryPersistence,
-        val wakeProfileProposal: LegacyWakeProfileProposal,
-    )
-
     fun discover(proposal: Map<Long, LegacyDisposition>): LegacyDiscoveryResult {
         val readiness = store.requireReady()
         requireBoundedUtf8("install epoch", readiness.installEpoch, MAX_INSTALL_EPOCH_UTF8_BYTES)
@@ -125,11 +125,11 @@ internal class LegacyBootstrapMigrator(
         )
     }
 
-    private fun snapshot(
+    internal fun snapshot(
         readiness: LegacyDiscoveryReadiness,
         proposal: Map<Long, LegacyDisposition>,
         discoveryNow: Long,
-    ): Snapshot {
+    ): LegacyCanonicalDiscoverySnapshot {
         val settings = settingsSource.readSettings()
         val activeAlarms = ArrayList<LegacyAlarmSnapshot>(MAX_ACTIVE_LEGACY_ALARMS)
         legacySource.readAlarms().forEach { alarm ->
@@ -176,7 +176,7 @@ internal class LegacyBootstrapMigrator(
             wakeProfileProposal.profile.importedAudioPath?.let {
                 "bootstrap/$token/legacy-audio"
             }
-        return Snapshot(
+        return LegacyCanonicalDiscoverySnapshot(
             LegacyDiscoveryPersistence(rows, fingerprint, token, target, fingerprintSeed),
             wakeProfileProposal,
         )
