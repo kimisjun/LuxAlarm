@@ -1,5 +1,6 @@
 /*
  * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +25,7 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [AlarmItem::class], version = 5, exportSchema = false)
+@Database(entities = [AlarmItem::class], version = 5, exportSchema = true)
 @TypeConverters(Converters::class)
 abstract class AlarmDatabase : RoomDatabase() {
     abstract fun alarmDao(): AlarmDao

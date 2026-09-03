@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +23,7 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.filters.MediumTest
+import androidx.test.platform.app.InstrumentationRegistry
 import com.dsalmun.luxalarm.data.AlarmDatabase
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_1_2
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_2_3
@@ -29,12 +31,15 @@ import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_3_4
 import com.dsalmun.luxalarm.data.AlarmDatabase.Companion.MIGRATION_4_5
 import com.dsalmun.luxalarm.data.AlarmItem
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.json.JSONObject
 
 @MediumTest
 class MigrationTest {
@@ -60,22 +65,22 @@ class MigrationTest {
         context.deleteDatabase(dbName)
     }
 
-    private fun createV1Database(alarms: List<V1Alarm>) {
+    private fun databaseFromFixture(assetPath: String): SQLiteDatabase {
         val dbPath = context.getDatabasePath(dbName)
         dbPath.parentFile?.mkdirs()
         val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS `alarms` (
-                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                `hour` INTEGER NOT NULL,
-                `minute` INTEGER NOT NULL,
-                `isActive` INTEGER NOT NULL,
-                `repeatDays` TEXT NOT NULL
-            )
-            """
-                .trimIndent()
-        )
+        val sql =
+            InstrumentationRegistry.getInstrumentation().context.assets.open(assetPath).bufferedReader()
+                .use { it.readText() }
+                .lineSequence()
+                .filterNot { it.trimStart().startsWith("--") }
+                .joinToString("\n")
+        sql.split(';').map(String::trim).filter(String::isNotEmpty).forEach(db::execSQL)
+        return db
+    }
+
+    private fun createV1Database(alarms: List<V1Alarm>) {
+        val db = databaseFromFixture("legacy/v1-alarms.sql")
         for (alarm in alarms) {
             val values =
                 ContentValues().apply {
@@ -87,7 +92,6 @@ class MigrationTest {
                 }
             db.insert("alarms", null, values)
         }
-        db.version = 1
         db.close()
     }
 
@@ -101,22 +105,7 @@ class MigrationTest {
     )
 
     private fun createV2Database(alarms: List<V2Alarm>) {
-        val dbPath = context.getDatabasePath(dbName)
-        dbPath.parentFile?.mkdirs()
-        val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS `alarms` (
-                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                `hour` INTEGER NOT NULL,
-                `minute` INTEGER NOT NULL,
-                `isActive` INTEGER NOT NULL,
-                `repeatDays` TEXT NOT NULL,
-                `ringtoneUri` TEXT
-            )
-            """
-                .trimIndent()
-        )
+        val db = databaseFromFixture("legacy/v2-ringtone.sql")
         for (alarm in alarms) {
             val values =
                 ContentValues().apply {
@@ -129,8 +118,11 @@ class MigrationTest {
                 }
             db.insert("alarms", null, values)
         }
-        db.version = 2
         db.close()
+    }
+
+    private fun createLegacyRingingStateV2Database() {
+        databaseFromFixture("legacy/v2-ringing-state.sql").close()
     }
 
     private data class V3Alarm(
@@ -145,24 +137,7 @@ class MigrationTest {
     )
 
     private fun createV3Database(alarms: List<V3Alarm>) {
-        val dbPath = context.getDatabasePath(dbName)
-        dbPath.parentFile?.mkdirs()
-        val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS `alarms` (
-                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                `hour` INTEGER NOT NULL,
-                `minute` INTEGER NOT NULL,
-                `isActive` INTEGER NOT NULL,
-                `repeatDays` TEXT NOT NULL,
-                `ringtoneUri` TEXT,
-                `volume` REAL,
-                `vibrationEnabled` INTEGER NOT NULL
-            )
-            """
-                .trimIndent()
-        )
+        val db = databaseFromFixture("legacy/v3-volume-vibration.sql")
         for (alarm in alarms) {
             val values =
                 ContentValues().apply {
@@ -177,7 +152,6 @@ class MigrationTest {
                 }
             db.insert("alarms", null, values)
         }
-        db.version = 3
         db.close()
     }
 
@@ -194,25 +168,7 @@ class MigrationTest {
     )
 
     private fun createV4Database(alarms: List<V4Alarm>) {
-        val dbPath = context.getDatabasePath(dbName)
-        dbPath.parentFile?.mkdirs()
-        val db = SQLiteDatabase.openOrCreateDatabase(dbPath, null)
-        db.execSQL(
-            """
-            CREATE TABLE IF NOT EXISTS `alarms` (
-                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                `hour` INTEGER NOT NULL,
-                `minute` INTEGER NOT NULL,
-                `isActive` INTEGER NOT NULL,
-                `repeatDays` TEXT NOT NULL,
-                `ringtoneUri` TEXT,
-                `volume` REAL,
-                `vibrationEnabled` INTEGER NOT NULL,
-                `skippedOccurrenceDay` INTEGER
-            )
-            """
-                .trimIndent()
-        )
+        val db = databaseFromFixture("legacy/v4-skipped-occurrence.sql")
         for (alarm in alarms) {
             val values =
                 ContentValues().apply {
@@ -228,15 +184,55 @@ class MigrationTest {
                 }
             db.insert("alarms", null, values)
         }
-        db.version = 4
         db.close()
     }
 
-    private fun openV3Database(): AlarmDatabase =
+    private fun openCurrentV5Database(): AlarmDatabase =
         Room.databaseBuilder(context, AlarmDatabase::class.java, dbName)
             .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
+
+    @Test
+    fun currentV5Schema_matchesCommittedRoomExport() {
+        val export =
+            InstrumentationRegistry.getInstrumentation().context.assets
+                .open("com.dsalmun.luxalarm.data.AlarmDatabase/5.json")
+                .bufferedReader()
+                .use { JSONObject(it.readText()).getJSONObject("database") }
+        val expectedSql =
+            export.getJSONArray("entities").getJSONObject(0).getString("createSql")
+                .replace("\${TABLE_NAME}", "alarms")
+
+        val db = openCurrentV5Database()
+        try {
+            val sqlite = db.openHelper.writableDatabase
+            val actualSql =
+                sqlite.query("SELECT sql FROM sqlite_master WHERE type='table' AND name='alarms'")
+                    .use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        cursor.getString(0)
+                    }
+            val actualIdentity =
+                sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    cursor.getString(0)
+                }
+
+            assertEquals(export.getInt("version"), sqlite.version)
+            assertEquals(export.getString("identityHash"), actualIdentity)
+            assertEquals(normalizeCreateSql(expectedSql), normalizeCreateSql(actualSql))
+        } finally {
+            db.close()
+        }
+    }
+
+    private fun normalizeCreateSql(sql: String): String =
+        sql.lowercase()
+            .replace("`", "")
+            .replace("if not exists ", "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
     @Test
     fun migrate1To2_addsRingtoneUriColumn() {
@@ -247,7 +243,7 @@ class MigrationTest {
             )
         createV1Database(v1Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(2, alarms.size)
@@ -276,7 +272,7 @@ class MigrationTest {
             listOf(V1Alarm(id = 1, hour = 6, minute = 0, isActive = true, repeatDays = ""))
         createV1Database(v1Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val dao = db.alarmDao()
             runBlocking {
@@ -323,7 +319,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(2, alarms.size)
@@ -347,6 +343,22 @@ class MigrationTest {
     }
 
     @Test
+    fun legacyRingingStateV2_hasNoSafeAutomaticMigration() {
+        createLegacyRingingStateV2Database()
+
+        val db = openCurrentV5Database()
+        try {
+            val failure = assertFails { db.openHelper.writableDatabase }
+            assertTrue(
+                failure.message.orEmpty().contains("ringtoneUri"),
+                "The known version collision must fail on its missing ringtoneUri column",
+            )
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
     fun migrate2To3_newRowsCanHaveCustomVolume() {
         val v2Alarms =
             listOf(
@@ -361,7 +373,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, volume = 0.5f)) }
@@ -396,7 +408,7 @@ class MigrationTest {
             )
         createV2Database(v2Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, vibrationEnabled = false)) }
@@ -433,7 +445,7 @@ class MigrationTest {
             )
         createV3Database(v3Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val alarms = runBlocking { db.alarmDao().getAllAlarms().first() }
             assertEquals(1, alarms.size)
@@ -465,7 +477,7 @@ class MigrationTest {
             )
         createV3Database(v3Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val dao = db.alarmDao()
             runBlocking {
@@ -503,7 +515,7 @@ class MigrationTest {
             )
         createV4Database(v4Alarms)
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
             assertEquals(1f, alarm.volume, "A slider drawn at full has to start ringing at full")
@@ -538,7 +550,7 @@ class MigrationTest {
             )
         )
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val alarm = runBlocking { db.alarmDao().getAllAlarms().first() }.single()
             assertEquals(0.25f, alarm.volume)
@@ -567,7 +579,7 @@ class MigrationTest {
             )
         )
 
-        val db = openV3Database()
+        val db = openCurrentV5Database()
         try {
             val dao = db.alarmDao()
             runBlocking { dao.insert(AlarmItem(hour = 8, minute = 15, volume = 0.5f)) }

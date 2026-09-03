@@ -1,3 +1,8 @@
+/*
+ * This build script is part of Lux Alarm, authored by Daniel Salmun.
+ * Modified for GentleWake in 2026.
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -15,9 +20,15 @@ kotlin {
     }
 }
 
+ksp {
+    arg("room.schemaLocation", file("schemas").path)
+}
+
 android {
     namespace = "com.dsalmun.luxalarm"
     compileSdk = 37
+
+    sourceSets["androidTest"].assets.srcDir("schemas")
 
     defaultConfig {
         applicationId = "com.dsalmun.luxalarm"

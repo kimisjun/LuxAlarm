@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
