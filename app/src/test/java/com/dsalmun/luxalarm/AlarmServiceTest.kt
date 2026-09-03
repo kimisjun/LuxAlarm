@@ -36,6 +36,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -151,6 +152,25 @@ class AlarmServiceTest {
             notification.flags and Notification.FLAG_ONGOING_EVENT != 0,
             "A ringing alarm must not be swipeable",
         )
+    }
+
+    @Test
+    fun gentleWakeNotificationPassesItsRingingScreenProfileToTheActivity() {
+        val service =
+            start(
+                gentleWake = true,
+                rampMinutes = 12,
+                startVolume = 0.08f,
+                maxVolume = 0.42f,
+                dismissal = WakeDismissal.LUX,
+            )
+
+        val notification = assertNotNull(shadowOf(service).lastForegroundNotification)
+        val activityIntent = assertNotNull(shadowOf(notification.fullScreenIntent).savedIntent)
+        assertEquals(ALARM_ID, activityIntent.getIntExtra("alarm_id", -1))
+        assertEquals(12, activityIntent.getIntExtra("ramp_minutes", -1))
+        assertEquals(WakeDismissal.LUX.name, activityIntent.getStringExtra("dismissal"))
+        assertTrue(activityIntent.hasExtra("ramp_started_elapsed_realtime"))
     }
 
     @Test
@@ -389,6 +409,71 @@ class AlarmServiceTest {
     }
 
     @Test
+    fun gentleWakeStartsAtFivePercentWithoutForcingTheDeviceAlarmVolume() {
+        setDeviceAlarmVolume(5)
+
+        start(gentleWake = true)
+
+        assertEquals(5, deviceAlarmVolume, "Gentle wake must respect the user's system volume")
+        assertEquals(
+            WakeRamp.DEFAULT_START_VOLUME,
+            shadowOf(createdPlayers.single()).leftVolume,
+        )
+
+        setDeviceAlarmVolume(2)
+        notifyVolumeSettingChanged()
+
+        assertEquals(2, deviceAlarmVolume, "Gentle wake must not install the forced-volume watcher")
+    }
+
+    @Test
+    fun gentleWakeRisesViaWakeRampToTheConfiguredMaximum() {
+        val startVolume = 0.1f
+        val maxVolume = 0.4f
+        val player =
+            start(
+                    gentleWake = true,
+                    rampMinutes = 1,
+                    startVolume = startVolume,
+                    maxVolume = maxVolume,
+                )
+                .let { createdPlayers.single() }
+
+        shadowOf(Looper.getMainLooper()).idleFor(30, TimeUnit.SECONDS)
+
+        assertEquals(
+            WakeRamp.frameAt(0.5f, startVolume, maxVolume).audioVolume,
+            shadowOf(player).leftVolume,
+        )
+
+        shadowOf(Looper.getMainLooper()).idleFor(30, TimeUnit.SECONDS)
+
+        assertEquals(maxVolume, shadowOf(player).leftVolume)
+    }
+
+    @Test
+    fun stoppingGentleWakeRemovesFurtherRampUpdates() {
+        val startVolume = 0.1f
+        val maxVolume = 0.4f
+        start(
+            gentleWake = true,
+            rampMinutes = 1,
+            startVolume = startVolume,
+            maxVolume = maxVolume,
+        )
+        val stoppedPlayer = createdPlayers.last()
+        shadowOf(Looper.getMainLooper()).idleFor(10, TimeUnit.SECONDS)
+        val volumeBeforeStop = shadowOf(stoppedPlayer).leftVolume
+        assertTrue(volumeBeforeStop > startVolume + 0.001f && volumeBeforeStop < maxVolume)
+        stop()
+        val volumeAtStop = shadowOf(stoppedPlayer).leftVolume
+
+        shadowOf(Looper.getMainLooper()).idleFor(1, TimeUnit.MINUTES)
+
+        assertEquals(volumeAtStop, shadowOf(stoppedPlayer).leftVolume)
+    }
+
+    @Test
     @Config(shadows = [ShadowUnchangeableAudioManager::class])
     fun start_whenTheDeviceRefusesTheOverride_turnsThePlayerDownInstead() {
         val deviceVolume = deviceAlarmVolume
@@ -501,6 +586,11 @@ class AlarmServiceTest {
         ringtoneUri: String? = null,
         volume: Float? = null,
         vibrationEnabled: Boolean = true,
+        gentleWake: Boolean = false,
+        rampMinutes: Int = WakeRamp.DEFAULT_RAMP_MINUTES,
+        startVolume: Float = WakeRamp.DEFAULT_START_VOLUME,
+        maxVolume: Float = WakeRamp.DEFAULT_MAX_VOLUME,
+        dismissal: WakeDismissal = WakeDismissal.DEFAULT,
     ): AlarmService {
         val intent =
             Intent(context, AlarmService::class.java).apply {
@@ -508,6 +598,11 @@ class AlarmServiceTest {
                 putExtra("ringtone_uri", ringtoneUri)
                 volume?.let { putExtra("volume", it) }
                 putExtra("vibration_enabled", vibrationEnabled)
+                putExtra("gentle_wake", gentleWake)
+                putExtra("ramp_minutes", rampMinutes)
+                putExtra("start_volume", startVolume)
+                putExtra("max_volume", maxVolume)
+                putExtra("dismissal", dismissal.name)
             }
         controller = Robolectric.buildService(AlarmService::class.java, intent).create()
         controller!!.startCommand(0, 0)

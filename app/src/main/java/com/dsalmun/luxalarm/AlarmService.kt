@@ -39,6 +39,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -58,11 +59,15 @@ class AlarmService : Service() {
     private var alarmStopped = false
     private var forcedAlarmVolume: Int? = null
     private var alarmVolumeWatcher: ContentObserver? = null
+    private val wakeRampHandler = Handler(Looper.getMainLooper())
+    private var wakeRampRunnable: Runnable? = null
+    private var gentleWakeActive = false
 
     companion object {
         const val ACTION_STOP_ALARM = "com.dsalmun.luxalarm.STOP_ALARM"
         internal const val ALARM_CHANNEL_ID = "alarm_channel_id"
         const val ALARM_NOTIFICATION_ID = 1001
+        private const val RAMP_UPDATE_INTERVAL_MILLIS = 100L
         var isRunning = false
             @VisibleForTesting internal set
     }
@@ -81,7 +86,31 @@ class AlarmService : Service() {
                 val ringtoneUri = intent?.getStringExtra("ringtone_uri")
                 val volume = intent?.getFloatExtra("volume", 1f) ?: 1f
                 val vibrationEnabled = intent?.getBooleanExtra("vibration_enabled", true) ?: true
-                startAlarm(alarmId, ringtoneUri, volume, vibrationEnabled)
+                val gentleWake = intent?.getBooleanExtra("gentle_wake", false) ?: false
+                val wakeProfile =
+                    WakeProfile(
+                        rampMinutes =
+                            intent?.getIntExtra("ramp_minutes", WakeRamp.DEFAULT_RAMP_MINUTES)
+                                ?: WakeRamp.DEFAULT_RAMP_MINUTES,
+                        startVolume =
+                            intent?.getFloatExtra("start_volume", WakeRamp.DEFAULT_START_VOLUME)
+                                ?: WakeRamp.DEFAULT_START_VOLUME,
+                        maxVolume =
+                            intent?.getFloatExtra("max_volume", WakeRamp.DEFAULT_MAX_VOLUME)
+                                ?: WakeRamp.DEFAULT_MAX_VOLUME,
+                        dismissal =
+                            intent?.getStringExtra("dismissal")?.let { stored ->
+                                WakeDismissal.entries.firstOrNull { it.name == stored }
+                            } ?: WakeDismissal.DEFAULT,
+                    )
+                startAlarm(
+                    alarmId,
+                    ringtoneUri,
+                    volume,
+                    vibrationEnabled,
+                    gentleWake,
+                    wakeProfile,
+                )
                 START_STICKY
             }
         }
@@ -92,15 +121,21 @@ class AlarmService : Service() {
         ringtoneUri: String?,
         volume: Float,
         vibrationEnabled: Boolean,
+        gentleWake: Boolean,
+        wakeProfile: WakeProfile,
     ) {
+        alarmStopped = false
         isRunning = true
+        gentleWakeActive = gentleWake
+        val rampStartedAtElapsedRealtime = SystemClock.elapsedRealtime()
         val audioAttrs = AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).build()
 
         // Notification, ringtone and vibration are started independently so they also fail
         // independently: whatever survives is all that stands between the user and a missed alarm.
         independently {
             createNotificationChannel()
-            val notification = buildAlarmNotification(alarmId)
+            val notification =
+                buildAlarmNotification(alarmId, wakeProfile, rampStartedAtElapsedRealtime)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(
                     ALARM_NOTIFICATION_ID,
@@ -111,7 +146,16 @@ class AlarmService : Service() {
                 startForeground(ALARM_NOTIFICATION_ID, notification)
             }
         }
-        independently { startRingtone(ringtoneUri, volume, audioAttrs) }
+        independently {
+            startRingtone(
+                ringtoneUri,
+                volume,
+                audioAttrs,
+                gentleWake,
+                wakeProfile,
+                rampStartedAtElapsedRealtime,
+            )
+        }
         if (vibrationEnabled) {
             independently { startVibration(audioAttrs) }
         }
@@ -126,7 +170,14 @@ class AlarmService : Service() {
         }
     }
 
-    private fun startRingtone(ringtoneUri: String?, volume: Float, audioAttrs: AudioAttributes) {
+    private fun startRingtone(
+        ringtoneUri: String?,
+        volume: Float,
+        audioAttrs: AudioAttributes,
+        gentleWake: Boolean,
+        wakeProfile: WakeProfile,
+        rampStartedAtElapsedRealtime: Long,
+    ) {
         // Audio focus keeps the system from ducking or stopping the alarm.
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioFocusRequest =
@@ -135,15 +186,58 @@ class AlarmService : Service() {
                 .build()
         audioManager?.requestAudioFocus(audioFocusRequest!!)
 
-        overrideAlarmStreamVolume(volume)
-        val playerVolume = if (forcedAlarmVolume != null) 1f else volume.coerceIn(0f, 1f)
+        val playerVolume =
+            if (gentleWake) {
+                wakeProfile.startVolume.coerceIn(0f, 1f)
+            } else {
+                overrideAlarmStreamVolume(volume)
+                if (forcedAlarmVolume != null) 1f else volume.coerceIn(0f, 1f)
+            }
 
         val defaultAlarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
         val selectedAlarmUri = ringtoneUri?.toUri()
-        mediaPlayer =
+        val player =
             createPlayerForUri(selectedAlarmUri, audioAttrs, playerVolume)
                 ?: createPlayerForUri(defaultAlarmUri, audioAttrs, playerVolume)
                 ?: throw IllegalStateException("Failed to create MediaPlayer for alarm audio")
+        mediaPlayer = player
+        if (gentleWake) {
+            startWakeRamp(player, wakeProfile, rampStartedAtElapsedRealtime)
+        }
+    }
+
+    private fun startWakeRamp(
+        player: MediaPlayer,
+        profile: WakeProfile,
+        startedAtElapsedRealtime: Long,
+    ) {
+        stopWakeRamp()
+        val startVolume = profile.startVolume.coerceIn(0f, 1f)
+        val maxVolume = profile.maxVolume.coerceIn(startVolume, 1f)
+        val durationMillis = profile.rampMinutes.coerceAtLeast(0).toLong() * 60_000L
+        lateinit var updateVolume: Runnable
+        updateVolume = Runnable {
+            if (alarmStopped || mediaPlayer !== player) return@Runnable
+            val elapsedMillis =
+                (SystemClock.elapsedRealtime() - startedAtElapsedRealtime).coerceAtLeast(0L)
+            val progress =
+                if (durationMillis == 0L) 1f
+                else (elapsedMillis.toFloat() / durationMillis).coerceIn(0f, 1f)
+            val rampVolume = WakeRamp.frameAt(progress, startVolume, maxVolume).audioVolume
+            player.setVolume(rampVolume, rampVolume)
+            if (progress < 1f) {
+                wakeRampHandler.postDelayed(updateVolume, RAMP_UPDATE_INTERVAL_MILLIS)
+            } else if (wakeRampRunnable === updateVolume) {
+                wakeRampRunnable = null
+            }
+        }
+        wakeRampRunnable = updateVolume
+        wakeRampHandler.post(updateVolume)
+    }
+
+    private fun stopWakeRamp() {
+        wakeRampRunnable?.let(wakeRampHandler::removeCallbacks)
+        wakeRampRunnable = null
     }
 
     private fun overrideAlarmStreamVolume(volume: Float) {
@@ -260,6 +354,7 @@ class AlarmService : Service() {
         if (alarmStopped) return
         alarmStopped = true
         isRunning = false
+        stopWakeRamp()
 
         mediaPlayer?.apply {
             if (isPlaying) {
@@ -272,7 +367,8 @@ class AlarmService : Service() {
         vibrator?.cancel()
         vibrator = null
 
-        restoreAlarmStreamVolume()
+        if (!gentleWakeActive) restoreAlarmStreamVolume()
+        gentleWakeActive = false
         audioFocusRequest?.let { audioManager?.abandonAudioFocusRequest(it) }
         audioFocusRequest = null
         audioManager = null
@@ -317,11 +413,18 @@ class AlarmService : Service() {
 
     // Alarm apps have FullScreenIntent enabled
     @SuppressLint("FullScreenIntentPolicy")
-    private fun buildAlarmNotification(alarmId: Int): Notification {
+    private fun buildAlarmNotification(
+        alarmId: Int,
+        wakeProfile: WakeProfile,
+        rampStartedAtElapsedRealtime: Long,
+    ): Notification {
         val fullScreenIntent =
             Intent(this, AlarmActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra("alarm_id", alarmId)
+                putExtra("ramp_minutes", wakeProfile.rampMinutes)
+                putExtra("dismissal", wakeProfile.dismissal.name)
+                putExtra("ramp_started_elapsed_realtime", rampStartedAtElapsedRealtime)
             }
         val fullScreenPendingIntent =
             PendingIntent.getActivity(

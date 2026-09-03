@@ -29,7 +29,8 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val alarmIds = intent?.getIntegerArrayListExtra("alarm_ids") ?: arrayListOf()
         val alarmId = alarmIds.firstOrNull() ?: -1
-        val ringtoneUri = resolveWakeRingtone(intent?.getStringExtra("ringtone_uri"))
+        val wakeProfile = AppContainer.settingsManager.getWakeProfile()
+        val ringtoneUri = resolveWakeRingtone(wakeProfile, intent?.getStringExtra("ringtone_uri"))
         val volume = intent?.getFloatExtra("volume", 1f) ?: 1f
         val vibrationEnabled = intent?.getBooleanExtra("vibration_enabled", true) ?: true
 
@@ -40,6 +41,11 @@ class AlarmReceiver : BroadcastReceiver() {
                     putExtra("ringtone_uri", ringtoneUri)
                     putExtra("volume", volume)
                     putExtra("vibration_enabled", vibrationEnabled)
+                    putExtra("gentle_wake", true)
+                    putExtra("ramp_minutes", wakeProfile.rampMinutes)
+                    putExtra("start_volume", wakeProfile.startVolume)
+                    putExtra("max_volume", wakeProfile.maxVolume)
+                    putExtra("dismissal", wakeProfile.dismissal.name)
                 }
             ContextCompat.startForegroundService(context, serviceIntent)
         }
@@ -55,9 +61,8 @@ class AlarmReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun resolveWakeRingtone(fallbackRingtoneUri: String?): String? {
-        val importedPath = AppContainer.settingsManager.getWakeProfile().importedAudioPath
-        val importedFile = importedPath?.let(::File)?.takeIf { it.isFile }
+    private fun resolveWakeRingtone(profile: WakeProfile, fallbackRingtoneUri: String?): String? {
+        val importedFile = profile.importedAudioPath?.let(::File)?.takeIf { it.isFile }
         return importedFile?.let(Uri::fromFile)?.toString() ?: fallbackRingtoneUri
     }
 }

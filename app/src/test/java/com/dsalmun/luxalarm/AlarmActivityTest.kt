@@ -79,6 +79,7 @@ class AlarmActivityTest {
                             AlarmActivity::class.java,
                         )
                         .putExtra("alarm_id", ALARM_ID)
+                        .putExtra("dismissal", WakeDismissal.LUX.name)
                 ),
             activityProvider = { rule ->
                 var activity: AlarmActivity? = null

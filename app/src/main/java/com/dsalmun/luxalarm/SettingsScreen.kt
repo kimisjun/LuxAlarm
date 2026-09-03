@@ -214,7 +214,7 @@ private fun WakeProfileSetting(
                 fontSize = 16.sp,
             )
             Text(
-                "미리보기 전용 · 예약 실행은 아직 연결되지 않았어요",
+                "알람 시각부터 점진 실행 · 목표 시각 전 시작은 아직 지원하지 않아요",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             )

@@ -132,7 +132,7 @@ class SettingsScreenContentTest {
         }
 
         composeRule.onNodeWithText("20분 · 5% → 35%").assertIsDisplayed()
-        composeRule.onNodeWithText("미리보기 전용 · 예약 실행은 아직 연결되지 않았어요").assertIsDisplayed()
+        composeRule.onNodeWithText("알람 시각부터 점진 실행 · 목표 시각 전 시작은 아직 지원하지 않아요").assertIsDisplayed()
         composeRule.onNodeWithText("Lux 미션 (선택)").performClick()
         composeRule.onNodeWithText("휴대폰 음악 가져오기").performClick()
 

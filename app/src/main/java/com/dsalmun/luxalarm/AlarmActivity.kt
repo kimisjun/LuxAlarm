@@ -23,6 +23,9 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -39,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,6 +58,12 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
     private var lightSensor: Sensor? = null
     private var currentLightLevel by mutableFloatStateOf(0f)
     private var requiredLightLevel by mutableFloatStateOf(SettingsManager.DEFAULT_LUX_LEVEL)
+    private var dismissal = WakeDismissal.DEFAULT
+    private var rampMinutes = WakeRamp.DEFAULT_RAMP_MINUTES
+    private var rampStartedAtElapsedRealtime = 0L
+    private var gentleWakeProgress by mutableFloatStateOf(0f)
+    private val screenRampHandler = Handler(Looper.getMainLooper())
+    private var screenRampRunnable: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,17 +78,39 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
         )
 
         alarmId = intent.getIntExtra("alarm_id", -1)
-        requiredLightLevel = AppContainer.settingsManager.getRequiredLuxLevel()
+        dismissal =
+            intent.getStringExtra("dismissal")?.let { stored ->
+                WakeDismissal.entries.firstOrNull { it.name == stored }
+            } ?: WakeDismissal.DEFAULT
+        rampMinutes = intent.getIntExtra("ramp_minutes", WakeRamp.DEFAULT_RAMP_MINUTES)
+        rampStartedAtElapsedRealtime =
+            if (intent.hasExtra("ramp_started_elapsed_realtime")) {
+                intent.getLongExtra("ramp_started_elapsed_realtime", SystemClock.elapsedRealtime())
+            } else {
+                SystemClock.elapsedRealtime()
+            }
         setupScreenWake()
-        setupLightSensor()
+        if (dismissal == WakeDismissal.LUX) {
+            requiredLightLevel = AppContainer.settingsManager.getRequiredLuxLevel()
+            setupLightSensor()
+        } else {
+            startGentleWakeScreenRamp()
+        }
 
         setContent {
             LuxAlarmTheme {
-                AlarmRingingScreen(
-                    currentLightLevel = currentLightLevel,
-                    requiredLightLevel = requiredLightLevel,
-                    onStopAlarm = { stopAlarm() },
-                )
+                if (dismissal == WakeDismissal.LUX) {
+                    AlarmRingingScreen(
+                        currentLightLevel = currentLightLevel,
+                        requiredLightLevel = requiredLightLevel,
+                        onStopAlarm = { stopAlarm() },
+                    )
+                } else {
+                    GentleWakeRingingScreen(
+                        progress = gentleWakeProgress,
+                        onAwake = { stopAlarm() },
+                    )
+                }
             }
         }
         setupFullscreen()
@@ -102,14 +134,16 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
-        lightSensor?.let { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+        if (dismissal == WakeDismissal.LUX) {
+            lightSensor?.let { sensor ->
+                sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI)
+            }
         }
     }
 
     override fun onPause() {
         super.onPause()
-        sensorManager.unregisterListener(this)
+        if (dismissal == WakeDismissal.LUX) sensorManager.unregisterListener(this)
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -126,6 +160,35 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    private fun startGentleWakeScreenRamp() {
+        val durationMillis = rampMinutes.coerceAtLeast(0).toLong() * 60_000L
+        lateinit var updateScreen: Runnable
+        updateScreen = Runnable {
+            val elapsedMillis =
+                (SystemClock.elapsedRealtime() - rampStartedAtElapsedRealtime).coerceAtLeast(0L)
+            gentleWakeProgress =
+                if (durationMillis == 0L) 1f
+                else (elapsedMillis.toFloat() / durationMillis).coerceIn(0f, 1f)
+            window.attributes =
+                window.attributes.apply {
+                    screenBrightness = WakeRamp.frameAt(gentleWakeProgress).screenBrightness
+                }
+            if (gentleWakeProgress < 1f) {
+                screenRampHandler.postDelayed(updateScreen, SCREEN_UPDATE_INTERVAL_MILLIS)
+            } else if (screenRampRunnable === updateScreen) {
+                screenRampRunnable = null
+            }
+        }
+        screenRampRunnable = updateScreen
+        screenRampHandler.post(updateScreen)
+    }
+
+    override fun onDestroy() {
+        screenRampRunnable?.let(screenRampHandler::removeCallbacks)
+        screenRampRunnable = null
+        super.onDestroy()
     }
 
     private fun setupFullscreen() {
@@ -148,6 +211,75 @@ class AlarmActivity : ComponentActivity(), SensorEventListener {
             }
         startService(stopIntent)
         finish()
+    }
+
+    private companion object {
+        const val SCREEN_UPDATE_INTERVAL_MILLIS = 100L
+    }
+}
+
+@Composable
+fun GentleWakeRingingScreen(
+    progress: Float,
+    onAwake: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val frame = WakeRamp.frameAt(progress)
+    val sunrise = Color(frame.sunriseRgb[0], frame.sunriseRgb[1], frame.sunriseRgb[2])
+    val currentTime = remember { SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()) }
+    val currentDate = remember {
+        SimpleDateFormat("EEEE, MMMM dd", Locale.getDefault()).format(Date())
+    }
+
+    Box(
+        modifier =
+            modifier
+                .fillMaxSize()
+                .testTag("gentle-wake-ringing")
+                .background(Brush.verticalGradient(listOf(Color(0xFF140A05), sunrise))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Text(
+                text = "부드럽게 깨어날 시간이에요",
+                color = Color.White,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = currentDate,
+                color = Color.White.copy(alpha = 0.76f),
+                fontSize = 16.sp,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(20.dp))
+            Text(
+                text = currentTime,
+                color = Color.White,
+                fontSize = 64.sp,
+                fontWeight = FontWeight.Light,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(56.dp))
+            Button(
+                onClick = onAwake,
+                modifier = Modifier.widthIn(min = 280.dp).heightIn(min = 72.dp),
+                shape = RoundedCornerShape(36.dp),
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color(0xFF5A2508),
+                    ),
+            ) {
+                Text(text = "일어났어요", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            }
+        }
     }
 }
 

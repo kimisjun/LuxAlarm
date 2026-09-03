@@ -55,6 +55,7 @@ WakeRun
 - foreground service가 오디오·화면·진동 램프를 한 실행으로 소유
 - 재부팅·시간대 변경·앱 업데이트 후 재예약
 - full-screen alarm Activity에서 sunrise 화면과 종료/Lux 미션 제공
+- 현재 제한: 램프는 알람 목표 시각에 시작하며, 목표 시각 이전 시작 예약은 아직 구현하지 않음
 - 모든 새 기능은 기존 테스트 스위트에 RED→GREEN으로 추가
 
 ## iOS

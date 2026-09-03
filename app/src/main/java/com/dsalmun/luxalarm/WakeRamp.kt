@@ -26,7 +26,7 @@ data class WakeRampFrame(
     val sunriseRgb: List<Float>,
 )
 
-/** Platform-independent smoothstep ramp shared by preview and eventual scheduled execution. */
+/** Platform-independent smoothstep ramp shared by preview and alarm execution. */
 object WakeRamp {
     const val DEFAULT_RAMP_MINUTES = 20
     const val DEFAULT_START_VOLUME = 0.05f

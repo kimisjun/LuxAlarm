@@ -75,18 +75,42 @@ class AlarmReceiverTest {
 
     @Test
     fun importedWakeMusicOverridesTheLegacyPerAlarmRingtoneAtFireTime() {
-        val imported = File(context.filesDir, "gentle-wake-audio/selected-audio").apply {
-            parentFile!!.mkdirs()
-            writeBytes(byteArrayOf(1, 2, 3, 4))
-        }
-        appContainer.settingsManager.updateWakeProfile(
-            appContainer.settingsManager.getWakeProfile().copy(importedAudioPath = imported.path)
-        )
+        val imported =
+            File(context.filesDir, "gentle-wake-audio/selected-audio").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3, 4))
+            }
+        val profile =
+            WakeProfile(
+                rampMinutes = 12,
+                startVolume = 0.08f,
+                maxVolume = 0.42f,
+                dismissal = WakeDismissal.LUX,
+                importedAudioPath = imported.path,
+            )
+        appContainer.settingsManager.updateWakeProfile(profile)
 
         sendAlarmBroadcast(alarmIntent())
 
         val started = assertNotNull(nextStartedService())
         assertEquals(Uri.fromFile(imported).toString(), started.getStringExtra("ringtone_uri"))
+        assertTrue(started.getBooleanExtra("gentle_wake", false))
+        assertEquals(profile.rampMinutes, started.getIntExtra("ramp_minutes", -1))
+        assertEquals(profile.startVolume, started.getFloatExtra("start_volume", -1f))
+        assertEquals(profile.maxVolume, started.getFloatExtra("max_volume", -1f))
+        assertEquals(profile.dismissal.name, started.getStringExtra("dismissal"))
+    }
+
+    @Test
+    fun aMissingImportedWakeMusicFallsBackToTheLegacyPerAlarmRingtone() {
+        appContainer.settingsManager.updateWakeProfile(
+            WakeProfile(importedAudioPath = File(context.filesDir, "missing-audio").path)
+        )
+
+        sendAlarmBroadcast(alarmIntent())
+
+        val started = assertNotNull(nextStartedService())
+        assertEquals(RINGTONE, started.getStringExtra("ringtone_uri"))
     }
 
     /** The receiver still has to reschedule, or the second alarm of the pair kills the chain. */
