@@ -59,6 +59,7 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/main/java/com/dsalmun/luxalarm/data/LegacySources.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/RoomWakeEventDispatchStore.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorReceiptStore.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/V6Entities.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/V6Migration.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/data/WakeEventDispatchDao.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
@@ -104,8 +105,10 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/test/java/com/dsalmun/luxalarm/data/RoomLegacyDiscoveryStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/RoomWakeEventDispatchStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorReceiptStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStoreTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/WakeEventDispatchStoreFaultFixture.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/WakeRecoveryAnchorReceiptStoreFaultFixture.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingStoreFaultFixture.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/V6DatabaseContractTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/V6MigrationTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/data/WakeRunStorageDaoTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
