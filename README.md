@@ -1,4 +1,10 @@
-# Lux Alarm
+# GentleWake · 부드러운 기상
+
+GentleWake is a 2026 modification of Lux Alarm 2.4.1 by Daniel Salmun. The
+Android code remains licensed under GNU GPLv3; see [LICENSE](LICENSE). Changes
+in this branch add the Korean gentle-wake preview, shared wake-ramp model,
+profile settings, and app-managed local audio import. Scheduled gradual wake
+execution is not part of this first preview slice.
 
 ![F-Droid Version](https://img.shields.io/f-droid/v/com.dsalmun.luxalarm)
 ![Downloads last month](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2Fkitswas%2Ffdroid-metrics-dashboard%2Fraw%2Frefs%2Fheads%2Fmain%2Fprocessed%2Fmonthly%2Fcom.dsalmun.luxalarm.json&query=%24.total_downloads&logo=fdroid&label=Downloads%20last%20month)
@@ -7,7 +13,7 @@
     alt="Get it on F-Droid"
     height="80">](https://f-droid.org/packages/com.dsalmun.luxalarm)
 
-**Lux Alarm** is a light-sensitive alarm clock designed to ensure you get out of bed. The alarm remains active until it detects a specific level of ambient light in your room.
+The upstream **Lux Alarm** behavior is a light-sensitive alarm clock designed to ensure you get out of bed. The alarm remains active until it detects a specific level of ambient light in your room.
 
 ## How It Works
 

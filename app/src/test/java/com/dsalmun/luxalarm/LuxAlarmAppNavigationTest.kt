@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,7 +44,7 @@ class LuxAlarmAppNavigationTest {
     fun startsOnTheAlarmList() {
         setContent()
 
-        composeRule.onNodeWithText("Lux Alarm").assertIsDisplayed()
+        composeRule.onNodeWithText("GentleWake · 부드러운 기상").assertIsDisplayed()
         composeRule.onNodeWithText("Required Light Level").assertDoesNotExist()
     }
 
@@ -54,7 +55,17 @@ class LuxAlarmAppNavigationTest {
         composeRule.onNodeWithContentDescription("Settings").performClick()
 
         composeRule.onNodeWithText("Required Light Level").assertIsDisplayed()
-        composeRule.onNodeWithText("Lux Alarm").assertDoesNotExist()
+        composeRule.onNodeWithText("GentleWake · 부드러운 기상").assertDoesNotExist()
+    }
+
+    @Test
+    fun theGentleWakePreviewAction_opensTheFullScreenPreview() {
+        setContent()
+
+        composeRule.onNodeWithText("부드러운 기상 미리보기").performClick()
+
+        composeRule.onNodeWithText("일어났어요").assertIsDisplayed()
+        composeRule.onNodeWithText("GentleWake · 부드러운 기상").assertDoesNotExist()
     }
 
     @Test
@@ -64,7 +75,7 @@ class LuxAlarmAppNavigationTest {
 
         composeRule.onNodeWithContentDescription("Back").performClick()
 
-        composeRule.onNodeWithText("Lux Alarm").assertIsDisplayed()
+        composeRule.onNodeWithText("GentleWake · 부드러운 기상").assertIsDisplayed()
     }
 
     /** A rotation recreates the activity, so the flag has to be saved, not merely remembered. */

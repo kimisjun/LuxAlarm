@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -109,6 +110,34 @@ class SettingsScreenContentTest {
             "Expected roughly 300 lux, got ${changes.single()}",
         )
         assertEquals(1, finished, "Releasing the slider is what persists the value")
+    }
+
+    @Test
+    fun gentleWakeSettingsShowDefaultsAndReportWholeProfileAndAudioActions() {
+        val profiles = mutableListOf<WakeProfile>()
+        var audioPicks = 0
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                SettingsScreenContent(
+                    requiredLuxLevel = 50f,
+                    currentLightLevel = 0f,
+                    wakeProfile = WakeProfile(),
+                    onBackClick = {},
+                    onLuxLevelChange = {},
+                    onLuxLevelChangeFinished = {},
+                    onWakeProfileChange = { profiles += it },
+                    onImportAudioClick = { audioPicks++ },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("20분 · 5% → 35%").assertIsDisplayed()
+        composeRule.onNodeWithText("미리보기 전용 · 예약 실행은 아직 연결되지 않았어요").assertIsDisplayed()
+        composeRule.onNodeWithText("Lux 미션 (선택)").performClick()
+        composeRule.onNodeWithText("휴대폰 음악 가져오기").performClick()
+
+        assertEquals(listOf(WakeProfile(dismissal = WakeDismissal.LUX)), profiles)
+        assertEquals(1, audioPicks)
     }
 
     private fun setContent(currentLightLevel: Float = 0f, requiredLuxLevel: Float = 50f) {

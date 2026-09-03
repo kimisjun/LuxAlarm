@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +70,7 @@ import kotlinx.coroutines.flow.collectLatest
 @Composable
 fun AlarmScreen(
     onSettingsClick: () -> Unit = {},
+    onGentleWakePreviewClick: () -> Unit = {},
     alarmViewModel: AlarmViewModel = viewModel(factory = AlarmViewModelFactory()),
     ringtoneNameFor: @Composable (String?) -> String = { uri ->
         val context = LocalContext.current
@@ -138,6 +141,7 @@ fun AlarmScreen(
         expandedAlarmId = expandedAlarmId,
         ringtoneNameFor = ringtoneNameFor,
         onSettingsClick = onSettingsClick,
+        onGentleWakePreviewClick = onGentleWakePreviewClick,
         onAddClick = {
             alarmToEdit = null
             showTimePickerDialog = true
@@ -223,6 +227,7 @@ fun AlarmScreenContent(
     expandedAlarmId: Int?,
     ringtoneNameFor: @Composable (String?) -> String,
     onSettingsClick: () -> Unit,
+    onGentleWakePreviewClick: () -> Unit = {},
     onAddClick: () -> Unit,
     onAlarmClick: (AlarmItem) -> Unit,
     onTimeClick: (AlarmItem) -> Unit,
@@ -247,8 +252,11 @@ fun AlarmScreenContent(
         },
         topBar = {
             TopAppBar(
-                title = { Text("Lux Alarm") },
+                title = { Text(stringResource(R.string.app_name)) },
                 actions = {
+                    TextButton(onClick = onGentleWakePreviewClick) {
+                        Text("부드러운 기상 미리보기")
+                    }
                     IconButton(onClick = onSettingsClick) {
                         Icon(
                             painter = painterResource(R.drawable.settings_24px),

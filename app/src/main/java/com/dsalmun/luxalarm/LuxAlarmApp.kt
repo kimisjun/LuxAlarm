@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +20,7 @@ package com.dsalmun.luxalarm
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -31,11 +33,25 @@ fun LuxAlarmApp() {
     // Saveable, not remembered: MainActivity declares no configChanges, so a rotation recreates it
     // and would otherwise kick the user out of settings.
     var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showGentleWakePreview by rememberSaveable { mutableStateOf(false) }
+    var previewProgress by rememberSaveable { mutableFloatStateOf(0f) }
 
-    BackHandler(enabled = showSettings) { showSettings = false }
-    if (showSettings) {
+    BackHandler(enabled = showSettings || showGentleWakePreview) {
+        showSettings = false
+        showGentleWakePreview = false
+    }
+    if (showGentleWakePreview) {
+        GentleWakePreview(
+            progress = previewProgress,
+            onProgressChange = { previewProgress = it },
+            onAwake = { showGentleWakePreview = false },
+        )
+    } else if (showSettings) {
         SettingsScreen(onBackClick = { showSettings = false })
     } else {
-        AlarmScreen(onSettingsClick = { showSettings = true })
+        AlarmScreen(
+            onSettingsClick = { showSettings = true },
+            onGentleWakePreviewClick = { showGentleWakePreview = true },
+        )
     }
 }

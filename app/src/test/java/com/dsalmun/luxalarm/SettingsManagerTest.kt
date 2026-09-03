@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -137,5 +138,30 @@ class SettingsManagerTest {
 
         manager.setRequiredLuxLevel(5_000f)
         assertEquals(5_000f, manager.getRequiredLuxLevel(), "Above MAX_LUX_LEVEL is stored as-is")
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun wakeProfileDefaultsAndAWholeProfileUpdateAreAtomic() = runTest {
+        val manager = SettingsManager(context)
+        val defaults =
+            WakeProfile(
+                rampMinutes = 20,
+                startVolume = 0.05f,
+                maxVolume = 0.35f,
+                dismissal = WakeDismissal.CONFIRM,
+            )
+        val updated = defaults.copy(rampMinutes = 30, maxVolume = 0.4f)
+        val seen = mutableListOf<WakeProfile>()
+        val job =
+            launch(UnconfinedTestDispatcher(testScheduler)) {
+                manager.wakeProfile.collect { seen.add(it) }
+            }
+
+        manager.updateWakeProfile(updated)
+
+        assertEquals(listOf(defaults, updated), seen, "One update must emit one complete profile")
+        assertEquals(updated, SettingsManager(context).getWakeProfile())
+        job.cancel()
     }
 }

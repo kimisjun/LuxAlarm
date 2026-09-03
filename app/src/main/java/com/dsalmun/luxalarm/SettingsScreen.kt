@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +22,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,12 +30,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun rememberLightSensorValue(): Float {
@@ -88,15 +96,50 @@ fun SettingsScreen(
     settingsManager: SettingsManager = remember { AppContainer.settingsManager },
     currentLightLevel: Float = rememberLightSensorValue(),
 ) {
+    val context = LocalContext.current
     val requiredLuxLevel by settingsManager.requiredLuxLevel.collectAsState()
+    val wakeProfile by settingsManager.wakeProfile.collectAsState()
     var sliderValue by remember(requiredLuxLevel) { mutableFloatStateOf(requiredLuxLevel) }
+    val scope = rememberCoroutineScope()
+    val audioStore =
+        remember(context) {
+            WakeAudioStore(File(context.filesDir, "gentle-wake-audio")) { documentUri ->
+                context.contentResolver.openInputStream(documentUri.toUri())
+            }
+        }
+    val audioPicker =
+        rememberLauncherForActivityResult(WakeAudioDocumentContract()) { documentUri ->
+            if (documentUri != null) {
+                val profileAtSelection = settingsManager.getWakeProfile()
+                scope.launch {
+                    val imported =
+                        withContext(Dispatchers.IO) {
+                            runCatching { audioStore.importDocument(documentUri) }
+                        }
+                    imported.onSuccess { source ->
+                        settingsManager.updateWakeProfile(
+                            profileAtSelection.copy(importedAudioPath = source.path)
+                        )
+                    }
+                }
+            }
+        }
+    val playableProfile =
+        if (audioStore.playbackSource(wakeProfile.importedAudioPath) == WakeAudioSource.Default) {
+            wakeProfile.copy(importedAudioPath = null)
+        } else {
+            wakeProfile
+        }
 
     SettingsScreenContent(
         requiredLuxLevel = sliderValue,
         currentLightLevel = currentLightLevel,
+        wakeProfile = playableProfile,
         onBackClick = onBackClick,
         onLuxLevelChange = { sliderValue = it },
         onLuxLevelChangeFinished = { settingsManager.setRequiredLuxLevel(sliderValue) },
+        onWakeProfileChange = settingsManager::updateWakeProfile,
+        onImportAudioClick = { audioPicker.launch(Unit) },
     )
 }
 
@@ -105,9 +148,12 @@ fun SettingsScreen(
 fun SettingsScreenContent(
     requiredLuxLevel: Float,
     currentLightLevel: Float,
+    wakeProfile: WakeProfile = WakeProfile(),
     onBackClick: () -> Unit,
     onLuxLevelChange: (Float) -> Unit,
     onLuxLevelChangeFinished: () -> Unit,
+    onWakeProfileChange: (WakeProfile) -> Unit = {},
+    onImportAudioClick: () -> Unit = {},
 ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -134,11 +180,67 @@ fun SettingsScreenContent(
             modifier = Modifier.padding(innerPadding).fillMaxSize().padding(16.dp),
             verticalArrangement = Arrangement.Top,
         ) {
+            WakeProfileSetting(
+                profile = wakeProfile,
+                onProfileChange = onWakeProfileChange,
+                onImportAudioClick = onImportAudioClick,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             LuxLevelSetting(
                 currentValue = requiredLuxLevel,
                 currentLightLevel = currentLightLevel,
                 onValueChange = onLuxLevelChange,
                 onValueChangeFinished = onLuxLevelChangeFinished,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WakeProfileSetting(
+    profile: WakeProfile,
+    onProfileChange: (WakeProfile) -> Unit,
+    onImportAudioClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("부드러운 기상", fontSize = 18.sp, fontWeight = FontWeight.Medium)
+            Text(
+                "${profile.rampMinutes}분 · ${(profile.startVolume * 100).toInt()}% → " +
+                    "${(profile.maxVolume * 100).toInt()}%",
+                fontSize = 16.sp,
+            )
+            Text(
+                "미리보기 전용 · 예약 실행은 아직 연결되지 않았어요",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = profile.dismissal == WakeDismissal.CONFIRM,
+                    onClick = {
+                        onProfileChange(profile.copy(dismissal = WakeDismissal.CONFIRM))
+                    },
+                    label = { Text("확인") },
+                )
+                FilterChip(
+                    selected = profile.dismissal == WakeDismissal.LUX,
+                    onClick = { onProfileChange(profile.copy(dismissal = WakeDismissal.LUX)) },
+                    label = { Text("Lux 미션 (선택)") },
+                )
+            }
+            Text(
+                if (profile.importedAudioPath == null) "기본 알람 소리" else "가져온 음악",
+                fontSize = 14.sp,
+            )
+            OutlinedButton(onClick = onImportAudioClick) { Text("휴대폰 음악 가져오기") }
+            Text(
+                stringResource(R.string.gpl_modification_notice),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
             )
         }
     }

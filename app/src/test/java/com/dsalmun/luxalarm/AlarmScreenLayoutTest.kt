@@ -1,5 +1,6 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
+ * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
+ * for GentleWake in 2026.
  *
  * Lux Alarm is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -118,7 +119,7 @@ class AlarmScreenLayoutTest {
     }
 
     private fun assertCoreControlsVisible() {
-        composeRule.onNodeWithText("Lux Alarm").assertIsDisplayed()
+        composeRule.onNodeWithText("GentleWake · 부드러운 기상").assertIsDisplayed()
         composeRule.onNodeWithText("07:05").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Add Alarm").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Settings").assertIsDisplayed()
