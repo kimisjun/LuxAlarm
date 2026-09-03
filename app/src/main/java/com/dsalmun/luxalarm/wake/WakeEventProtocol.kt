@@ -309,7 +309,7 @@ private fun WakeDispatchInput.hasUsableOppositeRecoverySlot(): Boolean =
         null -> null
     }?.isUsableFutureRecovery(nowEpochMillis) == true
 
-private fun String.isValidOwnerToken(): Boolean =
+internal fun String.isValidOwnerToken(): Boolean =
     isNotBlank() && boundedUtf8ByteCount(this, MAX_WAKE_OWNER_TOKEN_UTF8_BYTES) != null
 
 private fun requireBoundedUtf8(
