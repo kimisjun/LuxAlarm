@@ -36,6 +36,102 @@ class RoomWakeEventDispatchStoreTest {
     private lateinit var store: RoomWakeEventDispatchStore
     private val event = WakeEventIdentity("dispatch-snapshot", WakeEventKind.START, 1_000L)
 
+    @Test
+    fun recoveryAuthenticatesDeliveredTriggerAgainstSlotNotPrimaryAndPreservesPrimaryIdentity() {
+        listOf(WakeRecoverySlotId.A to 1_015L, WakeRecoverySlotId.B to 1_030L).forEachIndexed {
+            index,
+            (slot, trigger) ->
+            if (index > 0) {
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+            }
+            insertDispatch(
+                state = "RECEIVED",
+                slotAAt = if (slot == WakeRecoverySlotId.A) trigger else null,
+                slotAState = if (slot == WakeRecoverySlotId.A) "FIRED" else "CONSUMED",
+                slotAToken = 7L,
+                slotBAt = if (slot == WakeRecoverySlotId.B) trigger else null,
+                slotBState = if (slot == WakeRecoverySlotId.B) "FIRED" else "CONSUMED",
+                slotBToken = 7L,
+            )
+
+            val result =
+                store.reduce(
+                    event,
+                    recoveryArrival(
+                        slot,
+                        deliveredToken = 7L,
+                        deliveredTriggerEpochMillis = trigger,
+                    ),
+                    1_100L,
+                    500L,
+                )
+
+            assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome, slot.name)
+            assertEquals(event.expectedTriggerEpochMillis, result.dispatch?.expectedTriggerEpochMs)
+        }
+    }
+
+    @Test
+    fun wrongDeliveredRecoveryTriggerFailsClosedWithoutWrites() {
+        insertDispatch(
+            state = "RECEIVED",
+            slotAAt = 1_015L,
+            slotAState = "FIRED",
+            slotAToken = 7L,
+        )
+        val before = dispatchFingerprint()
+
+        val result =
+            store.reduce(
+                event,
+                recoveryArrival(
+                    WakeRecoverySlotId.A,
+                    deliveredToken = 7L,
+                    deliveredTriggerEpochMillis = 1_000L,
+                ),
+                1_100L,
+                500L,
+            )
+
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome)
+        assertEquals(before, dispatchFingerprint())
+    }
+
+    @Test
+    fun authenticatedRecoveryEventIdentityMustMatchStoreEvent() {
+        insertDispatch(
+            state = "RECEIVED",
+            slotAAt = 1_015L,
+            slotAState = "FIRED",
+            slotAToken = 7L,
+        )
+        val before = dispatchFingerprint()
+        val otherEvent = WakeEventIdentity("other-snapshot", WakeEventKind.START, 1_000L)
+
+        val result =
+            store.reduce(
+                event,
+                recoveryArrival(
+                    WakeRecoverySlotId.A,
+                    deliveredToken = 7L,
+                    deliveredTriggerEpochMillis = 1_015L,
+                    eventIdentity = otherEvent,
+                ),
+                1_100L,
+                500L,
+            )
+
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome)
+        assertEquals(before, dispatchFingerprint())
+    }
+
+    @Test
+    fun recoveryArrivalRejectsNegativeDeliveredTriggerAtConstruction() {
+        assertFailsWith<IllegalArgumentException> {
+            recoveryArrival(WakeRecoverySlotId.A, 7L, -1L)
+        }
+    }
+
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
@@ -110,7 +206,7 @@ class RoomWakeEventDispatchStoreTest {
             leaseOwner = "existing-lease",
             leaseExpiresAt = 5_000L,
             failureReason = "preserved",
-            slotAAt = 1_000L,
+            slotAAt = 1_015L,
             slotAState = "FIRED",
             slotAToken = 12L,
             slotBAt = 2_000L,
@@ -121,7 +217,11 @@ class RoomWakeEventDispatchStoreTest {
         val result =
             store.reduce(
                 event,
-                WakeEventArrival.Recovery(WakeRecoverySlotId.A, deliveredToken = 12L),
+                recoveryArrival(
+                    WakeRecoverySlotId.A,
+                    deliveredToken = 12L,
+                    deliveredTriggerEpochMillis = 1_015L,
+                ),
                 nowEpochMillis = 1_100L,
                 maxHeartbeatAgeMillis = 500L,
             )
@@ -163,7 +263,11 @@ class RoomWakeEventDispatchStoreTest {
         val result =
             store.reduce(
                 event,
-                WakeEventArrival.Recovery(WakeRecoverySlotId.B, deliveredToken = 5L),
+                recoveryArrival(
+                    WakeRecoverySlotId.B,
+                    deliveredToken = 5L,
+                    deliveredTriggerEpochMillis = 1_000L,
+                ),
                 nowEpochMillis = 1_100L,
                 maxHeartbeatAgeMillis = 500L,
             )
@@ -277,7 +381,12 @@ class RoomWakeEventDispatchStoreTest {
             slotAState = "FIRED",
             slotAToken = 9L,
         )
-        val slotA = WakeEventArrival.Recovery(WakeRecoverySlotId.A, deliveredToken = 9L)
+        val slotA =
+            recoveryArrival(
+                WakeRecoverySlotId.A,
+                deliveredToken = 9L,
+                deliveredTriggerEpochMillis = 1_000L,
+            )
         assertEquals(
             WakeEventStoreOutcome.APPLIED,
             store.reduce(event, slotA, 1_100L, 500L).outcome,
@@ -544,7 +653,7 @@ class RoomWakeEventDispatchStoreTest {
         val recovery =
             store.reduce(
                 event,
-                WakeEventArrival.Recovery(WakeRecoverySlotId.A, 4L),
+                recoveryArrival(WakeRecoverySlotId.A, 4L, 1_000L),
                 1_100L,
                 500L,
             )
@@ -566,7 +675,7 @@ class RoomWakeEventDispatchStoreTest {
         val exact =
             store.reduce(
                 event,
-                WakeEventArrival.Recovery(WakeRecoverySlotId.A, 9L),
+                recoveryArrival(WakeRecoverySlotId.A, 9L, 1_000L),
                 1_100L,
                 500L,
             )
@@ -583,7 +692,7 @@ class RoomWakeEventDispatchStoreTest {
             store
                 .reduce(
                     event,
-                    WakeEventArrival.Recovery(WakeRecoverySlotId.A, 9L),
+                    recoveryArrival(WakeRecoverySlotId.A, 9L, 1_000L),
                     1_100L,
                     500L,
                 )
@@ -600,7 +709,7 @@ class RoomWakeEventDispatchStoreTest {
             store
                 .reduce(
                     event,
-                    WakeEventArrival.Recovery(WakeRecoverySlotId.A, 9L),
+                    recoveryArrival(WakeRecoverySlotId.A, 9L, 1_000L),
                     1_100L,
                     500L,
                 )
@@ -617,7 +726,7 @@ class RoomWakeEventDispatchStoreTest {
             store
                 .reduce(
                     event,
-                    WakeEventArrival.Recovery(WakeRecoverySlotId.A, 9L),
+                    recoveryArrival(WakeRecoverySlotId.A, 9L, 1_000L),
                     1_100L,
                     500L,
                 )
@@ -627,7 +736,32 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
-    fun invalidRecoveryTokensFailClosedWithoutAdoptingDatabaseToken() {
+    fun consumedRecoveryDuplicateIsNecessarilyTokenOnlyInV6() {
+        insertDispatch(
+            state = "DISPATCH_REQUESTED",
+            armedPrimary = 0,
+            dispatchAttemptId = 2L,
+            attemptCount = 2L,
+            slotAState = "CONSUMED",
+            slotAToken = 10L,
+        )
+        val before = dispatchFingerprint()
+
+        val result =
+            store.reduce(
+                event,
+                recoveryArrival(WakeRecoverySlotId.A, 9L, 9_999L),
+                1_100L,
+                500L,
+            )
+
+        assertEquals(WakeEventStoreOutcome.CONVERGED, result.outcome)
+        assertEquals(WakeEventConvergence.ALREADY_CONSUMED, result.convergence)
+        assertEquals(before, dispatchFingerprint())
+    }
+
+    @Test
+    fun invalidRecoveryTokensAreRejectedBeforeStoreWithoutWrites() {
         insertDispatch(
             state = "RECEIVED",
             slotAAt = 1_000L,
@@ -636,17 +770,9 @@ class RoomWakeEventDispatchStoreTest {
         )
         listOf(-1L, Long.MAX_VALUE).forEach { delivered ->
             val before = dispatchFingerprint()
-            assertEquals(
-                WakeEventStoreOutcome.FAIL_CLOSED,
-                store
-                    .reduce(
-                        event,
-                        WakeEventArrival.Recovery(WakeRecoverySlotId.A, delivered),
-                        1_100L,
-                        500L,
-                    )
-                    .outcome,
-            )
+            assertFailsWith<IllegalArgumentException> {
+                recoveryArrival(WakeRecoverySlotId.A, delivered, 1_000L)
+            }
             assertEquals(before, dispatchFingerprint())
         }
         val mismatchBefore = dispatchFingerprint()
@@ -655,7 +781,7 @@ class RoomWakeEventDispatchStoreTest {
             store
                 .reduce(
                     event,
-                    WakeEventArrival.Recovery(WakeRecoverySlotId.A, 9L),
+                    recoveryArrival(WakeRecoverySlotId.A, 9L, 1_000L),
                     1_100L,
                     500L,
                 )
@@ -734,6 +860,145 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
+    fun authenticatedRecoveryFactoryRejectsNegativeTokenBeforeStore() {
+        assertFailsWith<IllegalArgumentException> {
+            AuthenticatedWakeEventArrivalFactory.fromVerifiedPendingIntentData(
+                eventIdentity = event,
+                slot = WakeRecoverySlotId.A,
+                token = -1L,
+                triggerEpochMillis = 1_015L,
+            )
+        }
+    }
+
+    @Test
+    fun authenticatedRecoveryFactoryRejectsMaximumTokenBeforeStore() {
+        assertFailsWith<IllegalArgumentException> {
+            AuthenticatedWakeEventArrivalFactory.fromVerifiedPendingIntentData(
+                eventIdentity = event,
+                slot = WakeRecoverySlotId.A,
+                token = Long.MAX_VALUE,
+                triggerEpochMillis = 1_015L,
+            )
+        }
+    }
+
+    @Test
+    fun authenticatedRecoveryFactoryAcceptsTokenBoundaries() {
+        listOf(0L, Long.MAX_VALUE - 1L).forEach { token ->
+            val arrival =
+                AuthenticatedWakeEventArrivalFactory.fromVerifiedPendingIntentData(
+                    eventIdentity = event,
+                    slot = WakeRecoverySlotId.A,
+                    token = token,
+                    triggerEpochMillis = 1_015L,
+                )
+
+            arrival.match(
+                onPrimary = { throw AssertionError("Expected recovery arrival") },
+                onRecovery = { recoveredEvent, recoveredSlot, recoveredToken, recoveredTrigger ->
+                    assertEquals(event, recoveredEvent)
+                    assertEquals(WakeRecoverySlotId.A, recoveredSlot)
+                    assertEquals(token, recoveredToken)
+                    assertEquals(1_015L, recoveredTrigger)
+                },
+            )
+        }
+    }
+
+    @Test
+    fun recoveryArrivalHasOnlyNamedAuthenticatedFactoryConstructionPath() {
+        assertTrue(
+            WakeEventArrival::class.java.declaredClasses.none { it.simpleName == "Recovery" },
+            "WakeEventArrival must not expose a directly constructible Recovery type",
+        )
+
+        val factory =
+            Class.forName("com.dsalmun.luxalarm.data.AuthenticatedWakeEventArrivalFactory")
+        assertEquals(
+            setOf(
+                "$" +
+                    "jacocoInit(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;" +
+                    "Ljava/lang/Class;)[Z|private static|synthetic=true|bridge=false",
+                "fromVerifiedPendingIntentData" +
+                    "(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
+                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ)" +
+                    "Lcom/dsalmun/luxalarm/data/WakeEventArrival;" +
+                    "|public final|synthetic=false|bridge=false",
+            ),
+            factory.declaredMethods.map(::methodSurface).toSet(),
+            "Lock the factory's complete declared-method surface",
+        )
+
+        val recoveryImplementations =
+            factory.declaredClasses.filter { WakeEventArrival::class.java.isAssignableFrom(it) }
+        assertEquals(1, recoveryImplementations.size)
+        val recoveryImplementation = recoveryImplementations.single()
+        assertEquals(
+            "private static final",
+            Modifier.toString(recoveryImplementation.modifiers),
+            "Recovery implementation class itself must remain JVM-private",
+        )
+
+        val constructorSurfaces =
+            recoveryImplementation.declaredConstructors.map(::constructorSurface).sorted()
+        assertEquals(
+            listOf(
+                "constructor(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
+                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ)V|private|synthetic=false",
+                "constructor(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
+                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ" +
+                    "Lkotlin/jvm/internal/DefaultConstructorMarker;)V|public|synthetic=true",
+            ),
+            constructorSurfaces,
+            "Lock every recovery constructor, including Kotlin's reflective-only synthetic bridge",
+        )
+
+        assertEquals(
+            setOf(
+                "$" +
+                    "jacocoInit(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;" +
+                    "Ljava/lang/Class;)[Z|private static|synthetic=true|bridge=false",
+                "match(Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function4;)" +
+                    "Ljava/lang/Object;|public|synthetic=false|bridge=false",
+            ),
+            recoveryImplementation.declaredMethods.map(::methodSurface).toSet(),
+            "Lock the recovery implementation's complete declared-method surface",
+        )
+
+        val companion = recoveryImplementation.declaredClasses.single()
+        assertEquals("Companion", companion.simpleName)
+        assertEquals("public static final", Modifier.toString(companion.modifiers))
+        assertEquals(
+            listOf(
+                "constructor()V|private|synthetic=false",
+                "constructor(Lkotlin/jvm/internal/DefaultConstructorMarker;)V|public|synthetic=true",
+            ),
+            companion.declaredConstructors.map(::constructorSurface).sorted(),
+            "Lock every companion constructor, including its Kotlin synthetic bridge",
+        )
+
+        assertEquals(
+            setOf(
+                "$" +
+                    "jacocoInit(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;" +
+                    "Ljava/lang/Class;)[Z|private static|synthetic=true|bridge=false",
+                "create" +
+                    "(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
+                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ)" +
+                    "Lcom/dsalmun/luxalarm/data/WakeEventArrival;" +
+                    "|public final|synthetic=false|bridge=false",
+            ),
+            companion.declaredMethods.map(::methodSurface).toSet(),
+            "Lock the companion's complete declared-method surface",
+        )
+
+        assertFailsWith<ClassNotFoundException> {
+            Class.forName("com.dsalmun.luxalarm.data.WakeEventArrival\$Recovery")
+        }
+    }
+
+    @Test
     fun productionVisibleConstructorsExposeOnlyTheDatabase() {
         val accessible =
             RoomWakeEventDispatchStore::class.java.declaredConstructors.filterNot {
@@ -743,6 +1008,20 @@ class RoomWakeEventDispatchStoreTest {
         assertEquals(1, accessible.size)
         assertEquals(listOf(AlarmDatabase::class.java), accessible.single().parameterTypes.toList())
     }
+
+    /** Test fixture deliberately exercises the same authenticated factory Task 5 must use. */
+    private fun recoveryArrival(
+        slot: WakeRecoverySlotId,
+        deliveredToken: Long,
+        deliveredTriggerEpochMillis: Long,
+        eventIdentity: WakeEventIdentity = event,
+    ): WakeEventArrival =
+        AuthenticatedWakeEventArrivalFactory.fromVerifiedPendingIntentData(
+            eventIdentity = eventIdentity,
+            slot = slot,
+            token = deliveredToken,
+            triggerEpochMillis = deliveredTriggerEpochMillis,
+        )
 
     private fun dispatchFingerprint(): List<String?> =
         database.openHelper.readableDatabase
@@ -836,6 +1115,42 @@ class RoomWakeEventDispatchStoreTest {
             ),
         )
     }
+
+    private fun constructorSurface(constructor: java.lang.reflect.Constructor<*>): String =
+        "constructor" +
+            constructor.parameterTypes.joinToString(
+                separator = "",
+                prefix = "(",
+                postfix = ")",
+            ) {
+                jvmDescriptor(it)
+            } +
+            "V|${Modifier.toString(constructor.modifiers)}|synthetic=${constructor.isSynthetic}"
+
+    private fun methodSurface(method: java.lang.reflect.Method): String =
+        method.name +
+            method.parameterTypes.joinToString(separator = "", prefix = "(", postfix = ")") {
+                jvmDescriptor(it)
+            } +
+            jvmDescriptor(method.returnType) +
+            "|${Modifier.toString(method.modifiers)}" +
+            "|synthetic=${method.isSynthetic}|bridge=${method.isBridge}"
+
+    private fun jvmDescriptor(type: Class<*>): String =
+        when (type) {
+            java.lang.Void.TYPE -> "V"
+            java.lang.Boolean.TYPE -> "Z"
+            java.lang.Byte.TYPE -> "B"
+            java.lang.Character.TYPE -> "C"
+            java.lang.Short.TYPE -> "S"
+            java.lang.Integer.TYPE -> "I"
+            java.lang.Long.TYPE -> "J"
+            java.lang.Float.TYPE -> "F"
+            java.lang.Double.TYPE -> "D"
+            else ->
+                if (type.isArray) type.name.replace('.', '/')
+                else "L${type.name.replace('.', '/')};"
+        }
 
     private fun snapshot(id: String) =
         WakeRunSnapshotEntity(

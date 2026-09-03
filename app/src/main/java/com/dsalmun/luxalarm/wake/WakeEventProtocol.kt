@@ -113,6 +113,7 @@ internal data class WakeDispatchInput(
     val serviceLeaseExpiresAt: Long?,
     val heartbeatAt: Long?,
     val arrivingSlot: WakeRecoverySlotId?,
+    val arrivingRecoveryTriggerEpochMillis: Long?,
     val slotA: WakeRecoverySlot,
     val slotB: WakeRecoverySlot,
     val nowEpochMillis: Long,
@@ -123,6 +124,14 @@ internal data class WakeDispatchInput(
         require(executionEpoch >= 0L) { "Execution epoch must not be negative" }
         require(nowEpochMillis >= 0L) { "Current epoch must not be negative" }
         require(maxHeartbeatAgeMillis > 0L) { "Heartbeat age bound must be positive" }
+        require((arrivingSlot == null) == (arrivingRecoveryTriggerEpochMillis == null)) {
+            "Recovery slot and delivered trigger must both be absent or both be present"
+        }
+        require(
+            arrivingRecoveryTriggerEpochMillis == null || arrivingRecoveryTriggerEpochMillis >= 0L
+        ) {
+            "Delivered recovery trigger epoch must not be negative"
+        }
         listOf(dispatchLeaseExpiresAt, serviceLeaseExpiresAt, heartbeatAt).forEach { epoch ->
             require(epoch == null || epoch >= 0L) {
                 "Lease and heartbeat epochs must not be negative"
@@ -187,7 +196,7 @@ internal object WakeDispatchReducer {
                         expectedRecoverySlot = input.arrivingSlot,
                         expectedRecoverySlotState = input.arrivingRecoverySlot()?.state,
                         expectedRecoveryTriggerAtEpochMillis =
-                            input.arrivingRecoverySlot()?.triggerAtEpochMillis,
+                            input.arrivingRecoveryTriggerEpochMillis,
                         expectedRecoverySlotToken = input.arrivingSlotToken(),
                         nextRecoverySlotState =
                             input.arrivingSlot?.let { WakeRecoverySlotState.CONSUMED },
@@ -232,7 +241,7 @@ private fun WakeDispatchInput.hasValidArrival(): Boolean {
             null -> return true
         }
     return slot.state in setOf(WakeRecoverySlotState.FIRED, WakeRecoverySlotState.IN_FLIGHT) &&
-        slot.triggerAtEpochMillis == event.expectedTriggerEpochMillis &&
+        slot.triggerAtEpochMillis == arrivingRecoveryTriggerEpochMillis &&
         slot.token != Long.MAX_VALUE
 }
 
@@ -284,7 +293,7 @@ private fun WakeDispatchInput.requestDispatch(): WakeDispatchReduction {
                 needsRecovery = !hasUsableOppositeRecoverySlot(),
                 expectedRecoverySlot = arrivingSlot,
                 expectedRecoverySlotState = arrivingRecoverySlot()?.state,
-                expectedRecoveryTriggerAtEpochMillis = arrivingRecoverySlot()?.triggerAtEpochMillis,
+                expectedRecoveryTriggerAtEpochMillis = arrivingRecoveryTriggerEpochMillis,
                 expectedRecoverySlotToken = arrivingToken,
                 nextRecoverySlotState = arrivingSlot?.let { WakeRecoverySlotState.CONSUMED },
                 nextRecoveryTriggerAtEpochMillis = null,

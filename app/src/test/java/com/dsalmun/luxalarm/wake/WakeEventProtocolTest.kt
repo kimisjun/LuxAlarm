@@ -13,6 +13,77 @@ import org.junit.Test
 
 class WakeEventProtocolTest {
     @Test
+    fun recoveryArrivalUsesDeliveredTriggerWithoutChangingPrimaryIdentity() {
+        val event = WakeEventIdentity("snapshot", WakeEventKind.START, 1_000L)
+        listOf(WakeRecoverySlotId.A to 1_015L, WakeRecoverySlotId.B to 1_030L).forEach {
+            (arrivingSlot, deliveredTrigger) ->
+            val selected = WakeRecoverySlot(WakeRecoverySlotState.FIRED, deliveredTrigger, 7L)
+            val result =
+                WakeDispatchReducer.reduce(
+                    input(
+                        event = event,
+                        arrivingSlot = arrivingSlot,
+                        arrivingRecoveryTriggerEpochMillis = deliveredTrigger,
+                        slotA =
+                            if (arrivingSlot == WakeRecoverySlotId.A) selected else input().slotA,
+                        slotB =
+                            if (arrivingSlot == WakeRecoverySlotId.B) selected else input().slotB,
+                    )
+                )
+
+            assertEquals(WakeDispatchAction.REQUEST_DISPATCH, result.action, arrivingSlot.name)
+            assertEquals(event.canonicalKey(), result.transition?.expectedEventKey)
+            assertEquals(deliveredTrigger, result.transition?.expectedRecoveryTriggerAtEpochMillis)
+            assertEquals(1_000L, event.expectedTriggerEpochMillis)
+        }
+    }
+
+    @Test
+    fun recoveryArrivalRejectsPrimaryTriggerWhenDurableSlotHasRecoveryTrigger() {
+        val result =
+            WakeDispatchReducer.reduce(
+                input(
+                    event = WakeEventIdentity("snapshot", WakeEventKind.START, 1_000L),
+                    arrivingRecoveryTriggerEpochMillis = 1_000L,
+                    slotA = WakeRecoverySlot(WakeRecoverySlotState.FIRED, 1_015L, 7L),
+                )
+            )
+
+        assertEquals(WakeDispatchAction.FAIL_CLOSED, result.action)
+        assertEquals(null, result.transition)
+    }
+
+    @Test
+    fun recoveryArrivalRequiresPairedNonnegativeSlotAndDeliveredTrigger() {
+        assertFailsWith<IllegalArgumentException> {
+            input(arrivingSlot = null, arrivingRecoveryTriggerEpochMillis = 1_015L)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            input(arrivingSlot = WakeRecoverySlotId.A, arrivingRecoveryTriggerEpochMillis = null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            input(arrivingRecoveryTriggerEpochMillis = -1L)
+        }
+        input(arrivingSlot = null, arrivingRecoveryTriggerEpochMillis = null)
+    }
+
+    @Test
+    fun reducerDoesNotDeriveRecoveryTriggerFromPrimaryEpoch() {
+        val input =
+            input(
+                event = WakeEventIdentity("snapshot", WakeEventKind.START, Long.MAX_VALUE),
+                arrivingRecoveryTriggerEpochMillis = 0L,
+                slotA = WakeRecoverySlot(WakeRecoverySlotState.FIRED, 0L, 7L),
+            )
+
+        val result = WakeDispatchReducer.reduce(input)
+
+        assertEquals(WakeDispatchAction.REQUEST_DISPATCH, result.action)
+        assertEquals(0L, result.transition?.expectedRecoveryTriggerAtEpochMillis)
+        assertEquals(Long.MAX_VALUE, input.event.expectedTriggerEpochMillis)
+    }
+
+    @Test
     fun canonicalEventKeyIsDeterministicAsciiAndBounded() {
         val identity = WakeEventIdentity("snapshot-한글:/|", WakeEventKind.START, 1_234L)
 
@@ -145,6 +216,7 @@ class WakeEventProtocolTest {
                 serviceLeaseExpiresAt = null,
                 heartbeatAt = null,
                 arrivingSlot = WakeRecoverySlotId.B,
+                arrivingRecoveryTriggerEpochMillis = 500L,
                 slotB = WakeRecoverySlot(WakeRecoverySlotState.CANCELLED, null, Long.MAX_VALUE),
                 nowEpochMillis = 10_000L,
             )
@@ -256,6 +328,7 @@ class WakeEventProtocolTest {
                     input(
                         state = WakeDispatchState.SERVICE_ACKED,
                         arrivingSlot = arrivingSlot,
+                        arrivingRecoveryTriggerEpochMillis = 500L,
                         slotA =
                             if (arrivingSlot == WakeRecoverySlotId.A) arriving else input().slotA,
                         slotB =
@@ -389,6 +462,7 @@ class WakeEventProtocolTest {
                 input(
                     scheduleOwner = WakeScheduleOwner.PREPARING_WAKE,
                     arrivingSlot = WakeRecoverySlotId.B,
+                    arrivingRecoveryTriggerEpochMillis = 500L,
                     slotB = WakeRecoverySlot(WakeRecoverySlotState.FIRED, 501L, 2L),
                 ),
                 input(
@@ -520,6 +594,7 @@ class WakeEventProtocolTest {
         val simultaneousOverdue =
             arrivingB.copy(
                 event = WakeEventIdentity("snapshot", WakeEventKind.START, 1_000L),
+                arrivingRecoveryTriggerEpochMillis = 1_000L,
                 slotB = WakeRecoverySlot(WakeRecoverySlotState.FIRED, 1_000L, 9L),
             )
 
@@ -684,6 +759,12 @@ class WakeEventProtocolTest {
         arrivingSlot: WakeRecoverySlotId? = WakeRecoverySlotId.A,
         slotA: WakeRecoverySlot = WakeRecoverySlot(WakeRecoverySlotState.FIRED, 500L, 1L),
         slotB: WakeRecoverySlot = WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 2L),
+        arrivingRecoveryTriggerEpochMillis: Long? =
+            when (arrivingSlot) {
+                WakeRecoverySlotId.A -> slotA.triggerAtEpochMillis
+                WakeRecoverySlotId.B -> slotB.triggerAtEpochMillis
+                null -> null
+            },
         nowEpochMillis: Long = 1_000L,
         maxHeartbeatAgeMillis: Long = 100L,
     ): WakeDispatchInput =
@@ -700,6 +781,7 @@ class WakeEventProtocolTest {
             serviceLeaseExpiresAt = serviceLeaseExpiresAt,
             heartbeatAt = heartbeatAt,
             arrivingSlot = arrivingSlot,
+            arrivingRecoveryTriggerEpochMillis = arrivingRecoveryTriggerEpochMillis,
             slotA = slotA,
             slotB = slotB,
             nowEpochMillis = nowEpochMillis,

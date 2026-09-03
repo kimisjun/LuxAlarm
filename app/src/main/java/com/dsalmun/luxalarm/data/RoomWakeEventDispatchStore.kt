@@ -16,12 +16,75 @@ import com.dsalmun.luxalarm.wake.WakeScheduleOwner
 
 /** Immutable identity supplied by the alarm delivery boundary. */
 internal sealed interface WakeEventArrival {
-    data object Primary : WakeEventArrival
+    fun <T> match(
+        onPrimary: () -> T,
+        onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
+    ): T
 
-    data class Recovery(
-        val slot: WakeRecoverySlotId,
-        val deliveredToken: Long,
-    ) : WakeEventArrival
+    data object Primary : WakeEventArrival {
+        override fun <T> match(
+            onPrimary: () -> T,
+            onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
+        ): T = onPrimary()
+    }
+}
+
+/**
+ * Sole normal construction path for authenticated recovery arrivals.
+ *
+ * Task 5 may call this only after its non-exported receiver has canonically parsed and validated an
+ * immutable, event-specific PendingIntent data URI. Intent extras are never authoritative input to
+ * this boundary. This is an auditable in-module chokepoint, not cryptographic isolation from other
+ * code in the same module.
+ *
+ * Kotlin emits public synthetic
+ * [DefaultConstructorMarker][kotlin.jvm.internal.DefaultConstructorMarker] bridges for the private
+ * nested implementation and its companion. Their enclosing implementation remains JVM-private, so
+ * those bridges are not a normal Kotlin/Java API path and are reachable only through reflection.
+ * Tests lock the complete constructor and creation-method surface; this remains an auditable,
+ * non-cryptographic same-module chokepoint.
+ */
+internal object AuthenticatedWakeEventArrivalFactory {
+    fun fromVerifiedPendingIntentData(
+        eventIdentity: WakeEventIdentity,
+        slot: WakeRecoverySlotId,
+        token: Long,
+        triggerEpochMillis: Long,
+    ): WakeEventArrival {
+        require(token >= 0L && token < Long.MAX_VALUE) {
+            "Delivered recovery token must be in [0, Long.MAX_VALUE)"
+        }
+        return AuthenticatedRecovery.create(eventIdentity, slot, token, triggerEpochMillis)
+    }
+
+    private class AuthenticatedRecovery
+    private constructor(
+        private val eventIdentity: WakeEventIdentity,
+        private val slot: WakeRecoverySlotId,
+        private val deliveredToken: Long,
+        private val deliveredTriggerEpochMillis: Long,
+    ) : WakeEventArrival {
+        init {
+            require(deliveredTriggerEpochMillis >= 0L) {
+                "Delivered recovery trigger epoch must not be negative"
+            }
+        }
+
+        override fun <T> match(
+            onPrimary: () -> T,
+            onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
+        ): T = onRecovery(eventIdentity, slot, deliveredToken, deliveredTriggerEpochMillis)
+
+        companion object {
+            fun create(
+                eventIdentity: WakeEventIdentity,
+                slot: WakeRecoverySlotId,
+                token: Long,
+                triggerEpochMillis: Long,
+            ): WakeEventArrival =
+                AuthenticatedRecovery(eventIdentity, slot, token, triggerEpochMillis)
+        }
+    }
 }
 
 internal enum class WakeEventStoreOutcome {
@@ -49,7 +112,9 @@ internal data class WakeEventStoreResult(
  * Transactional adapter from durable V6 rows to the pure, slot-based wake-event reducer.
  *
  * The reducer intentionally remains slot-based. This boundary authenticates the immutable recovery
- * delivery token before exposing only its slot to the reducer.
+ * delivery token and trigger against the durable selected slot before exposing the immutable
+ * delivery identity to the reducer. A consumed slot erases its trigger, so duplicate convergence
+ * can only be token-fenced here; the receiver must authenticate event-specific PendingIntent data.
  */
 internal class RoomWakeEventDispatchStore
 private constructor(
@@ -106,7 +171,11 @@ private constructor(
                 ArrivalGate.VALID -> Unit
             }
 
-            val context = baseContext.copy(arrivingSlot = arrival.recoverySlotOrNull())
+            val context =
+                baseContext.copy(
+                    arrivingSlot = arrival.recoverySlotOrNull(),
+                    arrivingRecoveryTriggerEpochMillis = arrival.recoveryTriggerOrNull(),
+                )
             val reduction = WakeDispatchReducer.reduce(context)
             val transition = reduction.transition
             if (transition == null) {
@@ -130,7 +199,7 @@ private constructor(
                     eventKey = transition.expectedEventKey,
                     expectedState = transition.expectedState.name,
                     expectedDispatchAttemptId = transition.expectedDispatchAttemptId,
-                    primaryArrival = arrival is WakeEventArrival.Primary,
+                    primaryArrival = arrival.isPrimary(),
                     arrivingSlot = transition.expectedRecoverySlot?.name,
                     expectedSlotState = transition.expectedRecoverySlotState?.name,
                     expectedSlotTrigger = transition.expectedRecoveryTriggerAtEpochMillis,
@@ -193,18 +262,21 @@ private constructor(
         input: WakeDispatchInput,
         arrival: WakeEventArrival,
     ): ArrivalGate =
-        when (arrival) {
-            WakeEventArrival.Primary ->
+        arrival.match(
+            onPrimary = {
                 when (row.armedPrimary) {
                     1 -> ArrivalGate.VALID
                     0 -> ArrivalGate.ALREADY_CONSUMED
                     else -> ArrivalGate.FAIL_CLOSED
                 }
-            is WakeEventArrival.Recovery -> {
-                val delivered = arrival.deliveredToken
-                if (delivered < 0L || delivered == Long.MAX_VALUE) return ArrivalGate.FAIL_CLOSED
+            },
+            onRecovery = { deliveredEvent, deliveredSlot, delivered, deliveredTrigger ->
+                if (deliveredEvent != input.event) return@match ArrivalGate.FAIL_CLOSED
+                if (delivered < 0L || delivered == Long.MAX_VALUE) {
+                    return@match ArrivalGate.FAIL_CLOSED
+                }
                 val slot =
-                    when (arrival.slot) {
+                    when (deliveredSlot) {
                         WakeRecoverySlotId.A -> input.slotA
                         WakeRecoverySlotId.B -> input.slotB
                     }
@@ -212,7 +284,7 @@ private constructor(
                     slot.token == delivered ->
                         if (
                             slot.state in RECOVERY_DELIVERABLE_STATES &&
-                                slot.triggerAtEpochMillis == input.event.expectedTriggerEpochMillis
+                                slot.triggerAtEpochMillis == deliveredTrigger
                         ) {
                             ArrivalGate.VALID
                         } else {
@@ -224,8 +296,8 @@ private constructor(
                     slot.token > delivered -> ArrivalGate.STALE_DELIVERY
                     else -> ArrivalGate.FAIL_CLOSED
                 }
-            }
-        }
+            },
+        )
 
     private fun loadContext(
         dao: WakeEventDispatchDao,
@@ -279,6 +351,7 @@ private constructor(
                     serviceLeaseExpiresAt = status.serviceLeaseExpiresAt,
                     heartbeatAt = status.heartbeatAt,
                     arrivingSlot = arrivingSlot,
+                    arrivingRecoveryTriggerEpochMillis = null,
                     slotA = slotA,
                     slotB = slotB,
                     nowEpochMillis = nowEpochMillis,
@@ -297,8 +370,13 @@ private constructor(
         return WakeRecoverySlot(state, trigger, token)
     }
 
+    private fun WakeEventArrival.isPrimary(): Boolean = match({ true }) { _, _, _, _ -> false }
+
     private fun WakeEventArrival.recoverySlotOrNull(): WakeRecoverySlotId? =
-        (this as? WakeEventArrival.Recovery)?.slot
+        match({ null }) { _, slot, _, _ -> slot }
+
+    private fun WakeEventArrival.recoveryTriggerOrNull(): Long? =
+        match({ null }) { _, _, _, trigger -> trigger }
 
     private fun WakeDispatchAction.toStoreOutcome(): WakeEventStoreOutcome =
         when (this) {
