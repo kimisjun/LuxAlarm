@@ -982,6 +982,14 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             ),
             entry.parameterTypes.toList(),
         )
+        val deadlineEntry =
+            RoomWakeRecoveryAnchorProcessingStore::class.java.declaredMethods.single {
+                it.name == "processDeadline"
+            }
+        assertEquals(
+            listOf(WakeRecoveryAnchorDelivery::class.java),
+            deadlineEntry.parameterTypes.toList(),
+        )
         assertTrue(
             RoomWakeRecoveryAnchorProcessingStore::class.java.declaredConstructors.any {
                 Modifier.isPrivate(it.modifiers) &&
@@ -996,7 +1004,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             }
         )
         assertEquals(
-            listOf("processFired"),
+            listOf("processDeadline", "processFired"),
             RoomWakeRecoveryAnchorProcessingStore::class
                 .java
                 .declaredMethods
@@ -1005,6 +1013,115 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                 .sorted(),
         )
     }
+
+    @Test
+    fun completeProcessingStoreJvmSurfaceIsExactlyLocked() {
+        val type = RoomWakeRecoveryAnchorProcessingStore::class.java
+        assertEquals(
+            listOf(
+                "constructor(Lcom/dsalmun/luxalarm/data/AlarmDatabase;)V|public|synthetic=false",
+                "constructor(Lcom/dsalmun/luxalarm/data/AlarmDatabase;Lkotlin/jvm/functions/Function1;)V|private|synthetic=false",
+            ),
+            type.declaredConstructors.map(::constructorSurface).sorted(),
+        )
+        val expectedMethods =
+            expectedSurface(
+                """
+                _init_#lambda#0(Ljava/lang/String;)Lkotlin/Unit;|private static final|synthetic=false|bridge=false
+                cancellationOutbox(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/Long;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
+                casResult(I)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
+                classifyDeadlineCasMiss#lambda#0(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineCasMiss;)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlinePoststate;|private static final|synthetic=false|bridge=false
+                classifyDeadlineCasMiss(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineCasMiss;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
+                createNextOutbox(Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
+                deadlineAnchorPostimages(Ljava/util/List;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorKind;)Ljava/util/List;|private final|synthetic=false|bridge=false
+                deadlineCasMiss(ILcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineExpectedPoststate;)Ljava/lang/Void;|private final|synthetic=false|bridge=false
+                deadlineOutboxRows(Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Ljava/util/List;Ljava/util/List;J)Ljava/util/List;|private final|synthetic=false|bridge=false
+                decide(Lcom/dsalmun/luxalarm/wake/WakeScheduleOwner;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#Decision;|private final|synthetic=false|bridge=false
+                duplicateResult(Lcom/dsalmun/luxalarm/wake/WakeScheduleOwner;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
+                hasActiveDispatchRequest(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;J)Z|private final|synthetic=false|bridge=false
+                hasHealthyServiceAck(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Z|private final|synthetic=false|bridge=false
+                matches(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorRow;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Z|private final|synthetic=false|bridge=false
+                pendingOutbox(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
+                processDeadline#lambda#0(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private static final|synthetic=false|bridge=false
+                processDeadline(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|public final|synthetic=false|bridge=false
+                processFired#lambda#3(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;JLjava/lang/String;J)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private static final|synthetic=false|bridge=false
+                processFired(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Ljava/lang/String;JJ)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|public final|synthetic=false|bridge=false
+                requireNonNegative([Ljava/lang/Long;)V|private final transient|synthetic=false|bridge=false
+                result(Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingOutcome;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
+                resultFailClosed()Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
+                terminalDispatch(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;)Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;|private final|synthetic=false|bridge=false
+                terminalSlotState(Ljava/lang/String;)Ljava/lang/String;|private final|synthetic=false|bridge=false
+                toBooleanFlag(I)Z|private final|synthetic=false|bridge=false
+                toPureRow(Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorEntity;Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;)Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorRow;|private final|synthetic=false|bridge=false
+                toPureStatus(Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;)Lcom/dsalmun/luxalarm/wake/WakeRecoveryRunStatus;|private final|synthetic=false|bridge=false
+                validateDeadlineAnchors(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;Ljava/util/List;Z)Ljava/util/List;|private final|synthetic=false|bridge=false
+                validateDeadlineDispatches(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Ljava/util/List;Z)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineDispatches;|private final|synthetic=false|bridge=false
+                validateDispatchRow(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Z)Lcom/dsalmun/luxalarm/wake/WakeDispatchState;|private final|synthetic=false|bridge=false
+                validateRows(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;Lcom/dsalmun/luxalarm/data/MigrationStateEntity;Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorEntity;)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#ValidatedContext;|private final|synthetic=false|bridge=false
+                validateSlot(Ljava/lang/String;Ljava/lang/Long;J)V|private final|synthetic=false|bridge=false
+                """
+            )
+        val methods = type.declaredMethods.map(::methodSurface).sorted()
+        val coverageMethods = methods.filter { it.startsWith("$" + "jacocoInit") }
+        assertTrue(
+            coverageMethods.isEmpty() ||
+                coverageMethods ==
+                    listOf(
+                        "$" +
+                            "jacocoInit(Ljava/lang/invoke/MethodHandles$" +
+                            "Lookup;Ljava/lang/String;Ljava/lang/Class;)[Z|private static|" +
+                            "synthetic=true|bridge=false"
+                    )
+        )
+        assertEquals(expectedMethods, methods - coverageMethods.toSet())
+        assertEquals(
+            listOf(
+                "$" + "stable:I|public static final|synthetic=false",
+                "database:Lcom/dsalmun/luxalarm/data/AlarmDatabase;|private final|synthetic=false",
+                "faultHook:Lkotlin/jvm/functions/Function1;|private final|synthetic=false",
+            ),
+            type.declaredFields.map(::fieldSurface).sorted(),
+        )
+    }
+
+    private fun expectedSurface(text: String): List<String> =
+        text.trimIndent().lines().filter(String::isNotBlank).map { it.replace('#', '$') }.sorted()
+
+    private fun constructorSurface(constructor: java.lang.reflect.Constructor<*>): String =
+        "constructor" +
+            constructor.parameterTypes.joinToString(separator = "", prefix = "(", postfix = ")") {
+                jvmDescriptor(it)
+            } +
+            "V|${Modifier.toString(constructor.modifiers)}|synthetic=${constructor.isSynthetic}"
+
+    private fun methodSurface(method: java.lang.reflect.Method): String =
+        method.name +
+            method.parameterTypes.joinToString(separator = "", prefix = "(", postfix = ")") {
+                jvmDescriptor(it)
+            } +
+            jvmDescriptor(method.returnType) +
+            "|${Modifier.toString(method.modifiers)}" +
+            "|synthetic=${method.isSynthetic}|bridge=${method.isBridge}"
+
+    private fun fieldSurface(field: java.lang.reflect.Field): String =
+        "${field.name}:${jvmDescriptor(field.type)}|${Modifier.toString(field.modifiers)}" +
+            "|synthetic=${field.isSynthetic}"
+
+    private fun jvmDescriptor(type: Class<*>): String =
+        when (type) {
+            java.lang.Void.TYPE -> "V"
+            java.lang.Boolean.TYPE -> "Z"
+            java.lang.Byte.TYPE -> "B"
+            java.lang.Character.TYPE -> "C"
+            java.lang.Short.TYPE -> "S"
+            java.lang.Integer.TYPE -> "I"
+            java.lang.Long.TYPE -> "J"
+            java.lang.Float.TYPE -> "F"
+            java.lang.Double.TYPE -> "D"
+            else ->
+                if (type.isArray) type.name.replace('.', '/')
+                else "L${type.name.replace('.', '/')};"
+        }
 
     private fun delivery(
         kind: WakeRecoveryAnchorKind = WakeRecoveryAnchorKind.GOAL_PRIMARY,

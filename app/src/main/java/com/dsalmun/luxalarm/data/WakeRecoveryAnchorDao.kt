@@ -5,6 +5,8 @@
 package com.dsalmun.luxalarm.data
 
 import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
 import androidx.room.Query
 
 /** Raw Room access for recovery-anchor stores; use a transactional store for composite work. */
@@ -12,6 +14,9 @@ import androidx.room.Query
 internal interface WakeRecoveryAnchorDao {
     @Query("SELECT * FROM wake_event_dispatch WHERE event_key = :eventKey")
     fun dispatch(eventKey: String): WakeEventDispatchEntity?
+
+    @Query("SELECT * FROM wake_event_dispatch WHERE snapshot_id = :snapshotId ORDER BY event_key")
+    fun dispatches(snapshotId: String): List<WakeEventDispatchEntity>
 
     @Query("SELECT * FROM wake_run_snapshot WHERE id = :snapshotId")
     fun snapshot(snapshotId: String): WakeRunSnapshotEntity?
@@ -25,6 +30,90 @@ internal interface WakeRecoveryAnchorDao {
         "SELECT * FROM wake_recovery_anchor WHERE event_key = :eventKey AND anchor_kind = :anchorKind"
     )
     fun anchor(eventKey: String, anchorKind: String): WakeRecoveryAnchorEntity?
+
+    @Query("SELECT * FROM wake_recovery_anchor WHERE event_key = :eventKey ORDER BY anchor_kind")
+    fun anchors(eventKey: String): List<WakeRecoveryAnchorEntity>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    fun insertOutbox(row: ScheduleOutboxEntity): Long
+
+    @Query("SELECT * FROM schedule_outbox WHERE id = :id")
+    fun outbox(id: String): ScheduleOutboxEntity?
+
+    @Query(
+        """
+        UPDATE wake_run_status
+        SET state = 'NO_CONFIRMATION',
+            active_service_owner_token = NULL,
+            execution_epoch = :nextExecutionEpoch,
+            service_lease_owner = NULL,
+            service_lease_expires_at = NULL,
+            heartbeat_at = NULL,
+            armed_start = 0,
+            armed_goal = 0,
+            completed_at = :completedAt,
+            cancelled_at = NULL,
+            failure_reason = 'NO_CONFIRMATION_DEADLINE'
+        WHERE snapshot_id = :snapshotId
+          AND state = :expectedState
+          AND processed_start_at IS :expectedProcessedStartAt
+          AND processed_goal_at IS :expectedProcessedGoalAt
+          AND active_service_owner_token IS :expectedActiveServiceOwnerToken
+          AND execution_epoch = :expectedExecutionEpoch
+          AND service_lease_owner IS :expectedServiceLeaseOwner
+          AND service_lease_expires_at IS :expectedServiceLeaseExpiresAt
+          AND heartbeat_at IS :expectedHeartbeatAt
+          AND armed_start = :expectedArmedStart
+          AND armed_goal = :expectedArmedGoal
+          AND started_at IS :expectedStartedAt
+          AND completed_at IS :expectedCompletedAt
+          AND cancelled_at IS :expectedCancelledAt
+          AND failure_reason IS :expectedFailureReason
+        """
+    )
+    fun compareAndSetStatusNoConfirmationRaw(
+        snapshotId: String,
+        expectedState: String,
+        expectedProcessedStartAt: Long?,
+        expectedProcessedGoalAt: Long?,
+        expectedActiveServiceOwnerToken: String?,
+        expectedExecutionEpoch: Long,
+        expectedServiceLeaseOwner: String?,
+        expectedServiceLeaseExpiresAt: Long?,
+        expectedHeartbeatAt: Long?,
+        expectedArmedStart: Int,
+        expectedArmedGoal: Int,
+        expectedStartedAt: Long?,
+        expectedCompletedAt: Long?,
+        expectedCancelledAt: Long?,
+        expectedFailureReason: String?,
+        nextExecutionEpoch: Long,
+        completedAt: Long,
+    ): Int
+
+    fun compareAndSetStatusNoConfirmation(
+        expected: WakeRunStatusEntity,
+        completedAt: Long,
+    ): Int =
+        compareAndSetStatusNoConfirmationRaw(
+            expected.snapshotId,
+            expected.state,
+            expected.processedStartAt,
+            expected.processedGoalAt,
+            expected.activeServiceOwnerToken,
+            expected.executionEpoch,
+            expected.serviceLeaseOwner,
+            expected.serviceLeaseExpiresAt,
+            expected.heartbeatAt,
+            expected.armedStart,
+            expected.armedGoal,
+            expected.startedAt,
+            expected.completedAt,
+            expected.cancelledAt,
+            expected.failureReason,
+            expected.executionEpoch + 1L,
+            completedAt,
+        )
 
     @Query(
         """
@@ -229,5 +318,35 @@ internal interface WakeRecoveryAnchorDao {
             expected.triggerEpochMs,
             expected.state,
             expected.pendingIntentIdentity,
+        )
+
+    @Query(
+        """
+        UPDATE wake_recovery_anchor
+        SET state = :nextState
+        WHERE event_key = :eventKey
+          AND anchor_kind = :anchorKind
+          AND trigger_epoch_ms = :triggerEpochMs
+          AND state = :expectedState
+          AND pending_intent_identity = :pendingIntentIdentity
+        """
+    )
+    fun compareAndSetAnchorStateRaw(
+        eventKey: String,
+        anchorKind: String,
+        triggerEpochMs: Long,
+        expectedState: String,
+        pendingIntentIdentity: String,
+        nextState: String,
+    ): Int
+
+    fun compareAndSetAnchorState(expected: WakeRecoveryAnchorEntity, nextState: String): Int =
+        compareAndSetAnchorStateRaw(
+            expected.eventKey,
+            expected.anchorKind,
+            expected.triggerEpochMs,
+            expected.state,
+            expected.pendingIntentIdentity,
+            nextState,
         )
 }

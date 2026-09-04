@@ -371,8 +371,7 @@ class RoomWakeRecoveryAnchorReceiptStoreTest {
 
     private fun setStatus(state: String) {
         val terminal = state !in setOf("PREPARED", "ACTIVE", "GOAL_REACHED")
-        val completed =
-            state in setOf("COMPLETED", "NO_CONFIRMATION", "FAILED", "SUPERSEDED", "EXPIRED")
+        val completed = state in setOf("COMPLETED", "NO_CONFIRMATION")
         val cancelled = state == "CANCELLED"
         val failure = if (state == "NO_CONFIRMATION") "NO_CONFIRMATION_DEADLINE" else null
         database.openHelper.writableDatabase.execSQL(

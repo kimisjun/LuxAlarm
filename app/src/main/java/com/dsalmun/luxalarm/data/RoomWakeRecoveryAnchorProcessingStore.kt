@@ -5,16 +5,21 @@
 package com.dsalmun.luxalarm.data
 
 import com.dsalmun.luxalarm.wake.WakeDispatchState
+import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakeFailureReason
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorDelivery
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
+import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorRow
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorState
+import com.dsalmun.luxalarm.wake.WakeRecoveryRunStatus
 import com.dsalmun.luxalarm.wake.WakeRecoverySlotState
 import com.dsalmun.luxalarm.wake.WakeRunState
 import com.dsalmun.luxalarm.wake.WakeScheduleOwner
 import com.dsalmun.luxalarm.wake.isValidOwnerToken
 
 internal enum class WakeRecoveryAnchorProcessingOutcome {
+    TERMINALIZED_NO_CONFIRMATION,
     NEW_DISPATCH_REQUEST,
     EXISTING_DURABLE_REQUEST,
     HEALTHY_EXECUTION,
@@ -67,6 +72,175 @@ private constructor(
 ) {
     internal constructor(database: AlarmDatabase) : this(database, {})
 
+    fun processDeadline(delivery: WakeRecoveryAnchorDelivery): WakeRecoveryAnchorProcessingResult {
+        try {
+            return database.runInTransaction<WakeRecoveryAnchorProcessingResult> {
+                val dao = database.wakeRecoveryAnchorDao()
+                val eventKey = delivery.event.canonicalKey()
+                val anchor =
+                    dao.anchor(eventKey, delivery.kind.name)
+                        ?: return@runInTransaction resultFailClosed()
+                if (
+                    anchor.eventKey != delivery.event.canonicalKey() ||
+                        anchor.anchorKind != delivery.kind.name ||
+                        anchor.triggerEpochMs != delivery.triggerEpochMillis ||
+                        anchor.pendingIntentIdentity != delivery.pendingIntentIdentity ||
+                        delivery.receivedAtEpochMillis < delivery.triggerEpochMillis
+                ) {
+                    return@runInTransaction result(
+                        WakeRecoveryAnchorProcessingOutcome.STALE_DELIVERY
+                    )
+                }
+                val dispatch = dao.dispatch(eventKey) ?: return@runInTransaction resultFailClosed()
+                val snapshot =
+                    dao.snapshot(delivery.event.snapshotId)
+                        ?: return@runInTransaction resultFailClosed()
+                val status =
+                    dao.status(delivery.event.snapshotId)
+                        ?: return@runInTransaction resultFailClosed()
+                val migration = dao.migrationState() ?: return@runInTransaction resultFailClosed()
+                val anchors = dao.anchors(eventKey)
+                val dispatches = dao.dispatches(delivery.event.snapshotId)
+                val context =
+                    try {
+                        validateRows(delivery, dispatch, snapshot, status, migration, anchor)
+                    } catch (_: IllegalArgumentException) {
+                        return@runInTransaction resultFailClosed()
+                    }
+                check(context.anchor.matches(delivery))
+                val deadlineDispatches =
+                    try {
+                        validateDeadlineAnchors(
+                            delivery.event,
+                            anchors,
+                            requireCanonicalSet = true,
+                        )
+                        validateDeadlineDispatches(
+                            delivery,
+                            snapshot,
+                            dispatches,
+                            requireTerminalState = context.status.state in terminalStates(),
+                        )
+                    } catch (_: IllegalArgumentException) {
+                        return@runInTransaction resultFailClosed()
+                    }
+                if (context.owner != WakeScheduleOwner.WAKE) {
+                    return@runInTransaction resultFailClosed()
+                }
+                if (context.status.state in terminalStates()) {
+                    return@runInTransaction result(
+                        WakeRecoveryAnchorProcessingOutcome.STALE_TERMINAL
+                    )
+                }
+                if (context.anchor.state != WakeRecoveryAnchorState.FIRED) {
+                    return@runInTransaction resultFailClosed()
+                }
+                val deadline =
+                    WakeRecoveryAnchorKind.GOAL_PLUS_30M.triggerForGoalOrNull(
+                        delivery.event.expectedTriggerEpochMillis
+                    ) ?: return@runInTransaction resultFailClosed()
+                if (delivery.receivedAtEpochMillis < deadline) {
+                    return@runInTransaction result(
+                        WakeRecoveryAnchorProcessingOutcome.OUT_OF_SCOPE_DEADLINE
+                    )
+                }
+                if (status.executionEpoch == Long.MAX_VALUE)
+                    return@runInTransaction resultFailClosed()
+                val outboxRows =
+                    try {
+                        deadlineOutboxRows(
+                            snapshot,
+                            listOf(deadlineDispatches.start, deadlineDispatches.goal),
+                            anchors,
+                            delivery.receivedAtEpochMillis,
+                        )
+                    } catch (_: IllegalArgumentException) {
+                        return@runInTransaction resultFailClosed()
+                    }
+                val expectedPoststate =
+                    DeadlineExpectedPoststate(
+                        prestate =
+                            DeadlinePrestate(
+                                snapshot = snapshot,
+                                status = status,
+                                currentAnchor = anchor,
+                                dispatches = deadlineDispatches,
+                                anchors = anchors,
+                            ),
+                        status =
+                            status.copy(
+                                state = WakeRunState.NO_CONFIRMATION.name,
+                                activeServiceOwnerToken = null,
+                                executionEpoch = status.executionEpoch + 1L,
+                                serviceLeaseOwner = null,
+                                serviceLeaseExpiresAt = null,
+                                heartbeatAt = null,
+                                armedStart = 0,
+                                armedGoal = 0,
+                                completedAt = delivery.receivedAtEpochMillis,
+                                cancelledAt = null,
+                                failureReason = WakeFailureReason.NO_CONFIRMATION_DEADLINE.name,
+                            ),
+                        dispatches =
+                            DeadlineDispatches(
+                                terminalDispatch(deadlineDispatches.start),
+                                terminalDispatch(deadlineDispatches.goal),
+                            ),
+                        anchors = deadlineAnchorPostimages(anchors, delivery.kind),
+                        outboxRows = outboxRows,
+                    )
+
+                faultHook("BEFORE_STATUS_CAS")
+                val changed =
+                    dao.compareAndSetStatusNoConfirmation(status, delivery.receivedAtEpochMillis)
+                if (changed != 1) deadlineCasMiss(changed, delivery, expectedPoststate)
+                faultHook("AFTER_STATUS_CAS")
+                faultHook("BEFORE_START_DISPATCH")
+                val startChanged =
+                    dao.compareAndSetDispatchPostimage(
+                        deadlineDispatches.start,
+                        expectedPoststate.dispatches.start,
+                    )
+                if (startChanged != 1) deadlineCasMiss(startChanged, delivery, expectedPoststate)
+                faultHook("AFTER_START_DISPATCH")
+                faultHook("BEFORE_GOAL_DISPATCH")
+                val goalChanged =
+                    dao.compareAndSetDispatchPostimage(
+                        deadlineDispatches.goal,
+                        expectedPoststate.dispatches.goal,
+                    )
+                if (goalChanged != 1) deadlineCasMiss(goalChanged, delivery, expectedPoststate)
+                faultHook("AFTER_GOAL_DISPATCH")
+                faultHook("BEFORE_ANCHORS")
+                anchors.forEach { sibling ->
+                    val nextState =
+                        expectedPoststate.anchors
+                            .single { it.anchorKind == sibling.anchorKind }
+                            .state
+                    if (nextState != sibling.state) {
+                        val anchorChanged = dao.compareAndSetAnchorState(sibling, nextState)
+                        if (anchorChanged != 1) {
+                            deadlineCasMiss(anchorChanged, delivery, expectedPoststate)
+                        }
+                    }
+                }
+                faultHook("AFTER_ANCHORS")
+                outboxRows.forEachIndexed { index, row ->
+                    faultHook("BEFORE_OUTBOX_INSERT_$index")
+                    val inserted = dao.insertOutbox(row)
+                    check(inserted != -1L || dao.outbox(row.id) == row) {
+                        "Conflicting schedule outbox row"
+                    }
+                    faultHook("AFTER_OUTBOX_INSERT_$index")
+                }
+                faultHook("BEFORE_RETURN")
+                result(WakeRecoveryAnchorProcessingOutcome.TERMINALIZED_NO_CONFIRMATION)
+            }
+        } catch (miss: DeadlineCasMiss) {
+            return classifyDeadlineCasMiss(miss)
+        }
+    }
+
     fun processFired(
         delivery: WakeRecoveryAnchorDelivery,
         proposedDispatchLeaseOwner: String,
@@ -104,22 +278,36 @@ private constructor(
                     return@runInTransaction resultFailClosed()
                 }
 
-            val exactDelivery = anchor.matches(delivery)
+            val exactDelivery = context.anchor.matches(delivery)
             if (!exactDelivery) {
                 return@runInTransaction result(WakeRecoveryAnchorProcessingOutcome.STALE_DELIVERY)
             }
+            val anchors = dao.anchors(eventKey)
+            try {
+                val anchorRows =
+                    validateDeadlineAnchors(delivery.event, anchors, requireCanonicalSet = false)
+                require(
+                    anchorRows.any {
+                        it.kind == context.anchor.kind &&
+                            it.triggerEpochMillis == context.anchor.triggerEpochMillis &&
+                            it.pendingIntentIdentity == context.anchor.pendingIntentIdentity
+                    }
+                )
+            } catch (_: IllegalArgumentException) {
+                return@runInTransaction resultFailClosed()
+            }
             if (
-                context.anchorState == WakeRecoveryAnchorState.CONSUMED &&
+                context.anchor.state == WakeRecoveryAnchorState.CONSUMED &&
                     delivery.kind == WakeRecoveryAnchorKind.GOAL_PRIMARY &&
                     dispatch.armedPrimary != 0
             ) {
                 return@runInTransaction resultFailClosed()
             }
-            if (context.statusState in terminalStates()) {
+            if (context.status.state in terminalStates()) {
                 return@runInTransaction result(WakeRecoveryAnchorProcessingOutcome.STALE_TERMINAL)
             }
 
-            if (context.anchorState == WakeRecoveryAnchorState.CONSUMED) {
+            if (context.anchor.state == WakeRecoveryAnchorState.CONSUMED) {
                 return@runInTransaction duplicateResult(
                     context.owner,
                     dispatch,
@@ -128,7 +316,7 @@ private constructor(
                     maxHeartbeatAgeMillis,
                 )
             }
-            if (context.anchorState != WakeRecoveryAnchorState.FIRED) {
+            if (context.anchor.state != WakeRecoveryAnchorState.FIRED) {
                 return@runInTransaction result(WakeRecoveryAnchorProcessingOutcome.STALE_DELIVERY)
             }
 
@@ -216,6 +404,134 @@ private constructor(
         }
     }
 
+    private fun deadlineCasMiss(
+        changed: Int,
+        delivery: WakeRecoveryAnchorDelivery,
+        expectedPoststate: DeadlineExpectedPoststate,
+    ): Nothing {
+        check(changed == 0) { "Room deadline CAS changed more than one row" }
+        throw DeadlineCasMiss(delivery, expectedPoststate)
+    }
+
+    private fun classifyDeadlineCasMiss(miss: DeadlineCasMiss): WakeRecoveryAnchorProcessingResult {
+        val poststate =
+            database.runInTransaction<DeadlinePoststate> {
+                val dao = database.wakeRecoveryAnchorDao()
+                DeadlinePoststate(
+                    status = dao.status(miss.delivery.event.snapshotId),
+                    currentAnchor =
+                        dao.anchor(
+                            miss.delivery.event.canonicalKey(),
+                            miss.delivery.kind.name,
+                        ),
+                    dispatches = dao.dispatches(miss.delivery.event.snapshotId),
+                    anchors = dao.anchors(miss.delivery.event.canonicalKey()),
+                    outboxRows = miss.expectedPoststate.outboxRows.map { dao.outbox(it.id) },
+                )
+            }
+        val snapshot = miss.expectedPoststate.prestate.snapshot
+        val status = poststate.status ?: return resultFailClosed()
+        val currentAnchor = poststate.currentAnchor ?: return resultFailClosed()
+        val pureStatus =
+            try {
+                require(snapshot.id == miss.delivery.event.snapshotId)
+                require(snapshot.goalEpochMs == miss.delivery.event.expectedTriggerEpochMillis)
+                require(snapshot.scheduleGeneration >= 0L)
+                require(snapshot.routineRevision >= 0L && snapshot.calculationRuleVersion >= 0L)
+                require(snapshot.wakeStartEpochMs >= 0L && snapshot.goalEpochMs >= 0L)
+                require(snapshot.createdAt >= 0L)
+                require(status.snapshotId == snapshot.id)
+                status.toPureStatus()
+            } catch (_: IllegalArgumentException) {
+                return resultFailClosed()
+            }
+        val dispatches =
+            try {
+                validateDeadlineAnchors(
+                    miss.delivery.event,
+                    poststate.anchors,
+                    requireCanonicalSet = true,
+                )
+                require(
+                    currentAnchor ==
+                        poststate.anchors.single { it.anchorKind == miss.delivery.kind.name }
+                )
+                currentAnchor.toPureRow(miss.delivery.event)
+                validateDeadlineDispatches(
+                    miss.delivery,
+                    snapshot,
+                    poststate.dispatches,
+                    requireTerminalState = pureStatus.state in terminalStates(),
+                )
+            } catch (_: IllegalArgumentException) {
+                return resultFailClosed()
+            }
+        if (pureStatus.state in terminalStates()) {
+            if (status != miss.expectedPoststate.status) return resultFailClosed()
+            if (dispatches != miss.expectedPoststate.dispatches) return resultFailClosed()
+            if (poststate.anchors != miss.expectedPoststate.anchors) return resultFailClosed()
+            if (
+                poststate.outboxRows.indices.any { index ->
+                    poststate.outboxRows[index] != miss.expectedPoststate.outboxRows[index]
+                }
+            ) {
+                return resultFailClosed()
+            }
+            return result(WakeRecoveryAnchorProcessingOutcome.STALE_TERMINAL)
+        }
+        if (
+            pureStatus.state !in
+                setOf(
+                    WakeRunState.PREPARED,
+                    WakeRunState.ACTIVE,
+                    WakeRunState.GOAL_REACHED,
+                )
+        ) {
+            return resultFailClosed()
+        }
+        val prestate = miss.expectedPoststate.prestate
+        return if (
+            status == prestate.status &&
+                currentAnchor == prestate.currentAnchor &&
+                dispatches == prestate.dispatches &&
+                poststate.anchors == prestate.anchors &&
+                poststate.outboxRows.all { it == null }
+        ) {
+            result(WakeRecoveryAnchorProcessingOutcome.RETRY_REQUIRED)
+        } else {
+            resultFailClosed()
+        }
+    }
+
+    private class DeadlineCasMiss(
+        val delivery: WakeRecoveryAnchorDelivery,
+        val expectedPoststate: DeadlineExpectedPoststate,
+    ) : RuntimeException(null, null, false, false)
+
+    private data class DeadlinePoststate(
+        val status: WakeRunStatusEntity?,
+        val currentAnchor: WakeRecoveryAnchorEntity?,
+        val dispatches: List<WakeEventDispatchEntity>,
+        val anchors: List<WakeRecoveryAnchorEntity>,
+        val outboxRows: List<ScheduleOutboxEntity?>,
+    )
+
+    private data class DeadlinePrestate(
+        val snapshot: WakeRunSnapshotEntity,
+        val status: WakeRunStatusEntity,
+        val currentAnchor: WakeRecoveryAnchorEntity,
+        val dispatches: DeadlineDispatches,
+        val anchors: List<WakeRecoveryAnchorEntity>,
+    )
+
+    private data class DeadlineExpectedPoststate(
+        val prestate: DeadlinePrestate,
+        val status: WakeRunStatusEntity,
+        val dispatches: DeadlineDispatches,
+        val anchors: List<WakeRecoveryAnchorEntity>,
+        val outboxRows: List<ScheduleOutboxEntity>,
+    )
+
     private fun validateRows(
         delivery: WakeRecoveryAnchorDelivery,
         dispatch: WakeEventDispatchEntity,
@@ -225,26 +541,7 @@ private constructor(
         anchor: WakeRecoveryAnchorEntity,
     ): ValidatedContext {
         val event = delivery.event
-        require(dispatch.eventKey == event.canonicalKey())
-        require(dispatch.snapshotId == event.snapshotId)
-        require(WakeEventKind.valueOf(dispatch.eventKind) == WakeEventKind.GOAL)
-        require(dispatch.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
-        require(dispatch.expectedTriggerEpochMs >= 0L)
-        WakeDispatchState.valueOf(dispatch.state)
-        require(dispatch.dispatchAttemptId >= 0L && dispatch.attemptCount >= 0L)
-        require(dispatch.armedPrimary in 0..1)
-        requireNonNegative(dispatch.leaseExpiresAt, dispatch.lastAttemptAt)
-        require((dispatch.leaseOwner == null) == (dispatch.leaseExpiresAt == null))
-        validateSlot(
-            dispatch.recoverySlotAState,
-            dispatch.recoverySlotAAt,
-            dispatch.recoverySlotAToken,
-        )
-        validateSlot(
-            dispatch.recoverySlotBState,
-            dispatch.recoverySlotBAt,
-            dispatch.recoverySlotBToken,
-        )
+        validateDispatchRow(event, dispatch, requireCanonicalLeaseOwner = false)
 
         require(snapshot.id == event.snapshotId)
         require(snapshot.goalEpochMs == event.expectedTriggerEpochMillis)
@@ -254,52 +551,272 @@ private constructor(
         require(snapshot.createdAt >= 0L)
 
         require(status.snapshotId == snapshot.id)
-        val statusState = WakeRunState.valueOf(status.state)
-        require(status.executionEpoch >= 0L)
-        require(status.armedStart in 0..1 && status.armedGoal in 0..1)
-        requireNonNegative(
-            status.processedStartAt,
-            status.processedGoalAt,
-            status.serviceLeaseExpiresAt,
-            status.heartbeatAt,
-            status.startedAt,
-            status.completedAt,
-            status.cancelledAt,
-        )
-        require((status.serviceLeaseOwner == null) == (status.serviceLeaseExpiresAt == null))
-        require(status.heartbeatAt == null || status.serviceLeaseOwner != null)
-        listOf(status.activeServiceOwnerToken, status.serviceLeaseOwner).forEach { owner ->
-            require(owner == null || owner.isValidOwnerToken())
-        }
-        if (statusState in terminalStates()) {
-            require(status.activeServiceOwnerToken == null)
-            require(status.serviceLeaseOwner == null && status.serviceLeaseExpiresAt == null)
-            require(status.heartbeatAt == null)
-            require(status.armedStart == 0 && status.armedGoal == 0)
-        } else {
-            require(status.completedAt == null && status.cancelledAt == null)
-            require(status.failureReason == null)
-        }
+        val canonicalStatus = status.toPureStatus()
 
         require(migration.id == 1)
         val owner = WakeScheduleOwner.valueOf(migration.scheduleOwner)
-        val storedKind = WakeRecoveryAnchorKind.valueOf(anchor.anchorKind)
-        val anchorState = WakeRecoveryAnchorState.valueOf(anchor.state)
-        require(anchor.eventKey == event.canonicalKey())
-        require(storedKind == delivery.kind)
-        require(anchor.triggerEpochMs >= 0L)
-        require(
-            anchor.triggerEpochMs ==
-                requireNotNull(storedKind.triggerForGoalOrNull(event.expectedTriggerEpochMillis))
-        )
-        require(anchor.pendingIntentIdentity.isNotEmpty())
-        return ValidatedContext(owner, statusState, anchorState)
+        require(WakeRecoveryAnchorKind.valueOf(anchor.anchorKind) == delivery.kind)
+        return ValidatedContext(owner, canonicalStatus, anchor.toPureRow(event))
     }
 
-    private fun WakeRecoveryAnchorEntity.matches(delivery: WakeRecoveryAnchorDelivery): Boolean =
-        eventKey == delivery.event.canonicalKey() &&
-            anchorKind == delivery.kind.name &&
-            triggerEpochMs == delivery.triggerEpochMillis &&
+    private fun validateDeadlineAnchors(
+        event: WakeEventIdentity,
+        anchors: List<WakeRecoveryAnchorEntity>,
+        requireCanonicalSet: Boolean,
+    ): List<WakeRecoveryAnchorRow> {
+        val rows = anchors.map { it.toPureRow(event) }
+        require(rows.map { it.kind }.toSet().size == rows.size)
+        require(rows.map { it.pendingIntentIdentity }.toSet().size == rows.size)
+        if (requireCanonicalSet) {
+            require(rows.size == WakeRecoveryAnchorKind.entries.size)
+            require(rows.map { it.kind }.toSet() == WakeRecoveryAnchorKind.entries.toSet())
+        }
+        return rows
+    }
+
+    private fun validateDeadlineDispatches(
+        delivery: WakeRecoveryAnchorDelivery,
+        snapshot: WakeRunSnapshotEntity,
+        rows: List<WakeEventDispatchEntity>,
+        requireTerminalState: Boolean,
+    ): DeadlineDispatches {
+        val startEvent =
+            WakeEventIdentity(snapshot.id, WakeEventKind.START, snapshot.wakeStartEpochMs)
+        require(rows.size == 2)
+        val rowsByKind =
+            rows
+                .associateBy { row -> WakeEventKind.valueOf(row.eventKind) }
+                .also {
+                    require(it.size == 2)
+                }
+        val startDispatch = requireNotNull(rowsByKind[WakeEventKind.START])
+        val goalDispatch = requireNotNull(rowsByKind[WakeEventKind.GOAL])
+        val startState =
+            validateDispatchRow(startEvent, startDispatch, requireCanonicalLeaseOwner = true)
+        val goalState =
+            validateDispatchRow(
+                delivery.event,
+                goalDispatch,
+                requireCanonicalLeaseOwner = true,
+            )
+        if (requireTerminalState) {
+            require(startState == WakeDispatchState.TERMINAL)
+            require(goalState == WakeDispatchState.TERMINAL)
+        } else {
+            require(startState != WakeDispatchState.TERMINAL)
+            require(goalState != WakeDispatchState.TERMINAL)
+        }
+        return DeadlineDispatches(startDispatch, goalDispatch)
+    }
+
+    private fun validateDispatchRow(
+        event: WakeEventIdentity,
+        row: WakeEventDispatchEntity,
+        requireCanonicalLeaseOwner: Boolean,
+    ): WakeDispatchState {
+        require(row.eventKey == event.canonicalKey())
+        require(row.snapshotId == event.snapshotId)
+        require(WakeEventKind.valueOf(row.eventKind) == event.kind)
+        require(row.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
+        require(row.expectedTriggerEpochMs >= 0L)
+        val state = WakeDispatchState.valueOf(row.state)
+        require(row.dispatchAttemptId >= 0L && row.attemptCount >= 0L)
+        require(row.armedPrimary in 0..1)
+        requireNonNegative(row.leaseExpiresAt, row.lastAttemptAt)
+        if (requireCanonicalLeaseOwner) {
+            require((row.leaseOwner == null) == (row.leaseExpiresAt == null))
+            require(row.leaseOwner == null || row.leaseOwner.isValidOwnerToken())
+            when (state) {
+                WakeDispatchState.DISPATCH_REQUESTED,
+                WakeDispatchState.SERVICE_ACKED -> require(row.leaseOwner != null)
+                WakeDispatchState.RECEIVED,
+                WakeDispatchState.DEFERRED,
+                WakeDispatchState.TERMINAL -> require(row.leaseOwner == null)
+            }
+        }
+        if (state == WakeDispatchState.TERMINAL) require(row.armedPrimary == 0)
+        validateSlot(row.recoverySlotAState, row.recoverySlotAAt, row.recoverySlotAToken)
+        validateSlot(row.recoverySlotBState, row.recoverySlotBAt, row.recoverySlotBToken)
+        if (state == WakeDispatchState.TERMINAL) {
+            require(
+                row.recoverySlotAState == WakeRecoverySlotState.CONSUMED.name ||
+                    row.recoverySlotAState == WakeRecoverySlotState.CANCELLED.name
+            )
+            require(row.recoverySlotAAt == null)
+            require(
+                row.recoverySlotBState == WakeRecoverySlotState.CONSUMED.name ||
+                    row.recoverySlotBState == WakeRecoverySlotState.CANCELLED.name
+            )
+            require(row.recoverySlotBAt == null)
+        }
+        return state
+    }
+
+    private fun terminalDispatch(row: WakeEventDispatchEntity): WakeEventDispatchEntity =
+        row.copy(
+            state = WakeDispatchState.TERMINAL.name,
+            leaseOwner = null,
+            leaseExpiresAt = null,
+            failureReason = "NO_CONFIRMATION_DEADLINE",
+            armedPrimary = 0,
+            recoverySlotAAt = null,
+            recoverySlotAState = terminalSlotState(row.recoverySlotAState),
+            recoverySlotBAt = null,
+            recoverySlotBState = terminalSlotState(row.recoverySlotBState),
+        )
+
+    private fun terminalSlotState(state: String): String =
+        if (state == WakeRecoverySlotState.CONSUMED.name) {
+            WakeRecoverySlotState.CONSUMED.name
+        } else {
+            WakeRecoverySlotState.CANCELLED.name
+        }
+
+    private fun deadlineOutboxRows(
+        snapshot: WakeRunSnapshotEntity,
+        dispatches: List<WakeEventDispatchEntity>,
+        anchors: List<WakeRecoveryAnchorEntity>,
+        now: Long,
+    ): List<ScheduleOutboxEntity> {
+        val rows = mutableListOf<ScheduleOutboxEntity>()
+        val goalPrimary = anchors.single {
+            it.anchorKind == WakeRecoveryAnchorKind.GOAL_PRIMARY.name
+        }
+        dispatches.forEach { dispatch ->
+            val isGoal = dispatch.eventKind == WakeEventKind.GOAL.name
+            val hasArmedPrimary =
+                if (isGoal) {
+                    dispatch.armedPrimary == 1 &&
+                        goalPrimary.state == WakeRecoveryAnchorState.ARMED.name
+                } else {
+                    dispatch.armedPrimary == 1
+                }
+            if (hasArmedPrimary) {
+                rows +=
+                    cancellationOutbox(
+                        snapshot.scheduleGeneration,
+                        "CANCEL_PRIMARY",
+                        dispatch.eventKey,
+                        "${dispatch.eventKind}_PRIMARY",
+                        "PRIMARY",
+                        dispatch.expectedTriggerEpochMs,
+                        if (isGoal) goalPrimary.pendingIntentIdentity else dispatch.eventKey,
+                        null,
+                        now,
+                    )
+            }
+            listOf(
+                    Triple("A", dispatch.recoverySlotAState, dispatch.recoverySlotAAt) to
+                        dispatch.recoverySlotAToken,
+                    Triple("B", dispatch.recoverySlotBState, dispatch.recoverySlotBAt) to
+                        dispatch.recoverySlotBToken,
+                )
+                .forEach { (slotFields, token) ->
+                    val (slot, state, trigger) = slotFields
+                    if (state == WakeRecoverySlotState.ARMED.name) {
+                        rows +=
+                            cancellationOutbox(
+                                snapshot.scheduleGeneration,
+                                "CANCEL_RECOVERY",
+                                dispatch.eventKey,
+                                "DYNAMIC",
+                                slot,
+                                requireNotNull(trigger),
+                                dispatch.eventKey,
+                                token,
+                                now,
+                            )
+                    }
+                }
+        }
+        anchors
+            .filter {
+                it.state == WakeRecoveryAnchorState.ARMED.name &&
+                    it.anchorKind != WakeRecoveryAnchorKind.GOAL_PRIMARY.name
+            }
+            .forEach { anchor ->
+                rows +=
+                    cancellationOutbox(
+                        snapshot.scheduleGeneration,
+                        "CANCEL_RECOVERY",
+                        anchor.eventKey,
+                        anchor.anchorKind,
+                        "IMMUTABLE",
+                        anchor.triggerEpochMs,
+                        anchor.pendingIntentIdentity,
+                        null,
+                        now,
+                    )
+            }
+        rows += createNextOutbox(snapshot, now)
+        check(rows.map { it.id }.toSet().size == rows.size) { "Duplicate schedule outbox target" }
+        return rows
+    }
+
+    private fun cancellationOutbox(
+        generation: Long,
+        command: String,
+        eventKey: String,
+        targetKind: String,
+        targetSlot: String,
+        trigger: Long,
+        pendingIntentIdentity: String,
+        token: Long?,
+        now: Long,
+    ): ScheduleOutboxEntity {
+        require(generation >= 0L && trigger >= 0L && now >= 0L)
+        val id =
+            ScheduleOutboxCanonicalizer.id(
+                "command" to command,
+                "generation" to generation.toString(),
+                "event" to eventKey,
+                "target_kind" to targetKind,
+                "target_slot" to targetSlot,
+                "token" to (token?.toString() ?: "-"),
+                "trigger" to trigger.toString(),
+                "pi_utf8_hex" to ScheduleOutboxCanonicalizer.hexUtf8(pendingIntentIdentity),
+            )
+        return pendingOutbox(id, generation, command, eventKey, now)
+    }
+
+    private fun createNextOutbox(
+        snapshot: WakeRunSnapshotEntity,
+        now: Long,
+    ): ScheduleOutboxEntity {
+        require(snapshot.scheduleGeneration >= 0L && now >= 0L)
+        val id =
+            ScheduleOutboxCanonicalizer.id(
+                "command" to "CREATE_NEXT",
+                "generation" to snapshot.scheduleGeneration.toString(),
+                "snapshot_utf8_hex" to ScheduleOutboxCanonicalizer.hexUtf8(snapshot.id),
+                "occurrence_utf8_hex" to ScheduleOutboxCanonicalizer.hexUtf8(snapshot.occurrenceId),
+            )
+        return pendingOutbox(id, snapshot.scheduleGeneration, "CREATE_NEXT", null, now)
+    }
+
+    private fun pendingOutbox(
+        id: String,
+        generation: Long,
+        command: String,
+        eventKey: String?,
+        now: Long,
+    ) =
+        ScheduleOutboxEntity(
+            id = id,
+            generation = generation,
+            command = command,
+            eventKey = eventKey,
+            state = "PENDING",
+            attemptCount = 0L,
+            notBeforeEpochMs = now,
+            createdAt = now,
+            lastError = null,
+        )
+
+    private fun WakeRecoveryAnchorRow.matches(delivery: WakeRecoveryAnchorDelivery): Boolean =
+        event == delivery.event &&
+            kind == delivery.kind &&
+            triggerEpochMillis == delivery.triggerEpochMillis &&
             pendingIntentIdentity == delivery.pendingIntentIdentity &&
             delivery.receivedAtEpochMillis >= delivery.triggerEpochMillis
 
@@ -421,6 +938,62 @@ private constructor(
         require(values.all { it == null || it >= 0L })
     }
 
+    private fun WakeRunStatusEntity.toPureStatus(): WakeRecoveryRunStatus =
+        WakeRecoveryRunStatus(
+            state = WakeRunState.valueOf(state),
+            processedStartAtEpochMillis = processedStartAt,
+            processedGoalAtEpochMillis = processedGoalAt,
+            activeServiceOwnerToken = activeServiceOwnerToken,
+            executionEpoch = executionEpoch,
+            serviceLeaseOwner = serviceLeaseOwner,
+            serviceLeaseExpiresAtEpochMillis = serviceLeaseExpiresAt,
+            heartbeatAtEpochMillis = heartbeatAt,
+            armedStart = armedStart.toBooleanFlag(),
+            armedGoal = armedGoal.toBooleanFlag(),
+            startedAtEpochMillis = startedAt,
+            completedAtEpochMillis = completedAt,
+            cancelledAtEpochMillis = cancelledAt,
+            failureReason = failureReason?.let(WakeFailureReason::valueOf),
+        )
+
+    private fun Int.toBooleanFlag(): Boolean {
+        require(this in 0..1)
+        return this == 1
+    }
+
+    private fun WakeRecoveryAnchorEntity.toPureRow(
+        event: WakeEventIdentity
+    ): WakeRecoveryAnchorRow {
+        require(eventKey == event.canonicalKey())
+        val kind = WakeRecoveryAnchorKind.valueOf(anchorKind)
+        return WakeRecoveryAnchorRow(
+            event = event,
+            kind = kind,
+            triggerEpochMillis = triggerEpochMs,
+            state = WakeRecoveryAnchorState.valueOf(state),
+            pendingIntentIdentity = pendingIntentIdentity,
+        )
+    }
+
+    private fun deadlineAnchorPostimages(
+        anchors: List<WakeRecoveryAnchorEntity>,
+        currentKind: WakeRecoveryAnchorKind,
+    ): List<WakeRecoveryAnchorEntity> = anchors.map { anchor ->
+        anchor.copy(
+            state =
+                if (anchor.anchorKind == currentKind.name) {
+                    WakeRecoveryAnchorState.CONSUMED.name
+                } else if (
+                    anchor.state == WakeRecoveryAnchorState.ARMED.name ||
+                        anchor.state == WakeRecoveryAnchorState.FIRED.name
+                ) {
+                    WakeRecoveryAnchorState.CANCELLED.name
+                } else {
+                    anchor.state
+                }
+        )
+    }
+
     private fun casResult(changed: Int): WakeRecoveryAnchorProcessingResult {
         check(changed == 0) { "Room processing CAS changed more than one row" }
         return result(WakeRecoveryAnchorProcessingOutcome.RETRY_REQUIRED)
@@ -433,8 +1006,13 @@ private constructor(
 
     private data class ValidatedContext(
         val owner: WakeScheduleOwner,
-        val statusState: WakeRunState,
-        val anchorState: WakeRecoveryAnchorState,
+        val status: WakeRecoveryRunStatus,
+        val anchor: WakeRecoveryAnchorRow,
+    )
+
+    private data class DeadlineDispatches(
+        val start: WakeEventDispatchEntity,
+        val goal: WakeEventDispatchEntity,
     )
 
     private data class Decision(

@@ -212,6 +212,7 @@ internal data class WakeRecoveryRunStatus(
                 require(cancelledAtEpochMillis == null) {
                     "COMPLETED cannot have cancellation timestamp"
                 }
+                require(failureReason == null) { "COMPLETED cannot have a failure reason" }
             }
             WakeRunState.CANCELLED -> {
                 require(cancelledAtEpochMillis != null) {
@@ -220,13 +221,21 @@ internal data class WakeRecoveryRunStatus(
                 require(completedAtEpochMillis == null) {
                     "CANCELLED cannot have completion timestamp"
                 }
+                require(failureReason == null) { "CANCELLED cannot have a failure reason" }
+            }
+            WakeRunState.FAILED,
+            WakeRunState.SUPERSEDED,
+            WakeRunState.EXPIRED -> {
+                require(completedAtEpochMillis == null && cancelledAtEpochMillis == null) {
+                    "Terminal state cannot have completion or cancellation timestamp"
+                }
+                require(failureReason == null) {
+                    "Terminal state cannot have deadline failure reason"
+                }
             }
             WakeRunState.PREPARED,
             WakeRunState.ACTIVE,
-            WakeRunState.GOAL_REACHED,
-            WakeRunState.FAILED,
-            WakeRunState.SUPERSEDED,
-            WakeRunState.EXPIRED -> Unit
+            WakeRunState.GOAL_REACHED -> Unit
         }
     }
 }
@@ -466,7 +475,7 @@ internal object WakeRecoveryAnchorInvariant {
     }
 }
 
-private fun requireCanonicalPendingIntentIdentity(value: String) {
+internal fun requireCanonicalPendingIntentIdentity(value: String) {
     require(value.isNotEmpty()) { "PendingIntent identity must not be empty" }
     require(value.length <= MAX_WAKE_ANCHOR_PI_IDENTITY_ASCII_CHARS) {
         "PendingIntent identity exceeds bound"
