@@ -15,7 +15,7 @@ import com.dsalmun.luxalarm.wake.WakeRecoverySlotState
 import com.dsalmun.luxalarm.wake.WakeScheduleOwner
 
 /** Immutable identity supplied by the alarm delivery boundary. */
-internal sealed interface WakeEventArrival {
+internal interface WakeEventArrival {
     fun <T> match(
         onPrimary: () -> T,
         onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
@@ -37,12 +37,8 @@ internal sealed interface WakeEventArrival {
  * this boundary. This is an auditable in-module chokepoint, not cryptographic isolation from other
  * code in the same module.
  *
- * Kotlin emits public synthetic
- * [DefaultConstructorMarker][kotlin.jvm.internal.DefaultConstructorMarker] bridges for the private
- * nested implementation and its companion. Their enclosing implementation remains JVM-private, so
- * those bridges are not a normal Kotlin/Java API path and are reachable only through reflection.
- * Tests lock the complete constructor and creation-method surface; this remains an auditable,
- * non-cryptographic same-module chokepoint.
+ * The implementation is anonymous and returned only here, avoiding a named constructor or static
+ * creation surface. Tests lock this as an auditable, non-cryptographic same-module chokepoint.
  */
 internal object AuthenticatedWakeEventArrivalFactory {
     fun fromVerifiedPendingIntentData(
@@ -54,35 +50,14 @@ internal object AuthenticatedWakeEventArrivalFactory {
         require(token >= 0L && token < Long.MAX_VALUE) {
             "Delivered recovery token must be in [0, Long.MAX_VALUE)"
         }
-        return AuthenticatedRecovery.create(eventIdentity, slot, token, triggerEpochMillis)
-    }
-
-    private class AuthenticatedRecovery
-    private constructor(
-        private val eventIdentity: WakeEventIdentity,
-        private val slot: WakeRecoverySlotId,
-        private val deliveredToken: Long,
-        private val deliveredTriggerEpochMillis: Long,
-    ) : WakeEventArrival {
-        init {
-            require(deliveredTriggerEpochMillis >= 0L) {
-                "Delivered recovery trigger epoch must not be negative"
-            }
+        require(triggerEpochMillis >= 0L) {
+            "Delivered recovery trigger epoch must not be negative"
         }
-
-        override fun <T> match(
-            onPrimary: () -> T,
-            onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
-        ): T = onRecovery(eventIdentity, slot, deliveredToken, deliveredTriggerEpochMillis)
-
-        companion object {
-            fun create(
-                eventIdentity: WakeEventIdentity,
-                slot: WakeRecoverySlotId,
-                token: Long,
-                triggerEpochMillis: Long,
-            ): WakeEventArrival =
-                AuthenticatedRecovery(eventIdentity, slot, token, triggerEpochMillis)
+        return object : WakeEventArrival {
+            override fun <T> match(
+                onPrimary: () -> T,
+                onRecovery: (WakeEventIdentity, WakeRecoverySlotId, Long, Long) -> T,
+            ): T = onRecovery(eventIdentity, slot, token, triggerEpochMillis)
         }
     }
 }
@@ -407,7 +382,11 @@ private constructor(
         const val BEFORE_CAS = "BEFORE_CAS"
         const val AFTER_CAS = "AFTER_CAS"
         val RECOVERY_DELIVERABLE_STATES =
-            setOf(WakeRecoverySlotState.FIRED, WakeRecoverySlotState.IN_FLIGHT)
+            setOf(
+                WakeRecoverySlotState.ARMED,
+                WakeRecoverySlotState.FIRED,
+                WakeRecoverySlotState.IN_FLIGHT,
+            )
         val LIVE_SLOT_STATES =
             setOf(
                 WakeRecoverySlotState.ARMED,

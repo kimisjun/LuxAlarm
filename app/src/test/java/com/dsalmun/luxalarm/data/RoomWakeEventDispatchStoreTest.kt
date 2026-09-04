@@ -18,6 +18,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
@@ -35,6 +36,70 @@ class RoomWakeEventDispatchStoreTest {
     private lateinit var database: AlarmDatabase
     private lateinit var store: RoomWakeEventDispatchStore
     private val event = WakeEventIdentity("dispatch-snapshot", WakeEventKind.START, 1_000L)
+
+    @Test
+    fun earlyExactRecoveryFailsClosedWithZeroWritesForAllLiveStatesAndBothSlots() {
+        listOf("ARMED", "FIRED", "IN_FLIGHT").forEach { slotState ->
+            WakeRecoverySlotId.entries.forEach { slot ->
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+                insertDispatch(
+                    state = "RECEIVED",
+                    slotAAt = if (slot == WakeRecoverySlotId.A) 1_101L else null,
+                    slotAState = if (slot == WakeRecoverySlotId.A) slotState else "CONSUMED",
+                    slotAToken = 7L,
+                    slotBAt = if (slot == WakeRecoverySlotId.B) 1_101L else null,
+                    slotBState = if (slot == WakeRecoverySlotId.B) slotState else "CONSUMED",
+                    slotBToken = 7L,
+                )
+                val before = allTablesFingerprint()
+
+                val result = store.reduce(event, recoveryArrival(slot, 7L, 1_101L), 1_100L, 500L)
+
+                assertEquals(
+                    WakeEventStoreOutcome.FAIL_CLOSED,
+                    result.outcome,
+                    "$slot/$slotState",
+                )
+                assertEquals(before, allTablesFingerprint(), "$slot/$slotState")
+            }
+        }
+    }
+
+    @Test
+    fun exactRecoveryAtItsTriggerIsAcceptedForBothSlotsAndOwners() {
+        listOf("PREPARING_WAKE", "WAKE").forEach { owner ->
+            WakeRecoverySlotId.entries.forEach { slot ->
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+                database.openHelper.writableDatabase.execSQL(
+                    "UPDATE migration_state SET schedule_owner = ? WHERE id = 1",
+                    arrayOf(owner),
+                )
+                insertDispatch(
+                    state = "RECEIVED",
+                    slotAAt = if (slot == WakeRecoverySlotId.A) 1_100L else null,
+                    slotAState = if (slot == WakeRecoverySlotId.A) "ARMED" else "CONSUMED",
+                    slotAToken = 7L,
+                    slotBAt = if (slot == WakeRecoverySlotId.B) 1_100L else null,
+                    slotBState = if (slot == WakeRecoverySlotId.B) "ARMED" else "CONSUMED",
+                    slotBToken = 7L,
+                )
+
+                val result = store.reduce(event, recoveryArrival(slot, 7L, 1_100L), 1_100L, 500L)
+
+                assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome, "$owner/$slot")
+                assertEquals(
+                    if (owner == "WAKE") "DISPATCH_REQUESTED" else "DEFERRED",
+                    result.dispatch?.state,
+                    "$owner/$slot",
+                )
+                assertEquals(
+                    "CONSUMED",
+                    if (slot == WakeRecoverySlotId.A) result.dispatch?.recoverySlotAState
+                    else result.dispatch?.recoverySlotBState,
+                )
+            }
+        }
+    }
 
     @Test
     fun recoveryAuthenticatesDeliveredTriggerAgainstSlotNotPrimaryAndPreservesPrimaryIdentity() {
@@ -68,6 +133,48 @@ class RoomWakeEventDispatchStoreTest {
 
             assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome, slot.name)
             assertEquals(event.expectedTriggerEpochMillis, result.dispatch?.expectedTriggerEpochMs)
+        }
+    }
+
+    @Test
+    fun armedFiredAndInFlightRecoveryStatesUseTheSameExactTokenAndTriggerFence() {
+        listOf("ARMED", "FIRED", "IN_FLIGHT").forEachIndexed { index, slotState ->
+            if (index > 0) {
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+            }
+            insertDispatch(
+                state = "RECEIVED",
+                slotAAt = 1_015L,
+                slotAState = slotState,
+                slotAToken = 7L,
+            )
+            val before = dispatchFingerprint()
+            val wrongToken = recoveryArrival(WakeRecoverySlotId.A, 6L, 1_015L)
+            val wrongTrigger = recoveryArrival(WakeRecoverySlotId.A, 7L, 1_016L)
+
+            assertEquals(
+                WakeEventStoreOutcome.STALE_DELIVERY,
+                store.reduce(event, wrongToken, 1_100L, 500L).outcome,
+            )
+            assertEquals(before, dispatchFingerprint(), slotState)
+            assertEquals(
+                WakeEventStoreOutcome.FAIL_CLOSED,
+                store.reduce(event, wrongTrigger, 1_100L, 500L).outcome,
+            )
+            assertEquals(before, dispatchFingerprint(), slotState)
+
+            val applied =
+                store.reduce(
+                    event,
+                    recoveryArrival(WakeRecoverySlotId.A, 7L, 1_015L),
+                    1_100L,
+                    500L,
+                )
+            assertEquals(WakeEventStoreOutcome.APPLIED, applied.outcome, slotState)
+            assertEquals("DISPATCH_REQUESTED", applied.dispatch?.state, slotState)
+            assertEquals("CONSUMED", applied.dispatch?.recoverySlotAState, slotState)
+            assertNull(applied.dispatch?.recoverySlotAAt, slotState)
+            assertEquals(8L, applied.dispatch?.recoverySlotAToken, slotState)
         }
     }
 
@@ -930,29 +1037,28 @@ class RoomWakeEventDispatchStoreTest {
             "Lock the factory's complete declared-method surface",
         )
 
-        val recoveryImplementations =
-            factory.declaredClasses.filter { WakeEventArrival::class.java.isAssignableFrom(it) }
-        assertEquals(1, recoveryImplementations.size)
-        val recoveryImplementation = recoveryImplementations.single()
-        assertEquals(
-            "private static final",
-            Modifier.toString(recoveryImplementation.modifiers),
-            "Recovery implementation class itself must remain JVM-private",
-        )
+        val recoveryImplementation =
+            AuthenticatedWakeEventArrivalFactory.fromVerifiedPendingIntentData(
+                    event,
+                    WakeRecoverySlotId.A,
+                    1L,
+                    1_015L,
+                )
+                .javaClass
 
         val constructorSurfaces =
             recoveryImplementation.declaredConstructors.map(::constructorSurface).sorted()
-        assertEquals(
-            listOf(
-                "constructor(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
-                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ)V|private|synthetic=false",
-                "constructor(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
-                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ" +
-                    "Lkotlin/jvm/internal/DefaultConstructorMarker;)V|public|synthetic=true",
-            ),
-            constructorSurfaces,
-            "Lock every recovery constructor, including Kotlin's reflective-only synthetic bridge",
-        )
+        assertEquals(1, constructorSurfaces.size)
+        recoveryImplementation.declaredConstructors.forEach { constructor ->
+            assertFalse(Modifier.isPublic(constructor.modifiers), constructor.toString())
+            assertFalse(Modifier.isProtected(constructor.modifiers), constructor.toString())
+            assertFalse(
+                constructor.parameterTypes.any {
+                    it.name == "kotlin.jvm.internal.DefaultConstructorMarker"
+                },
+                constructor.toString(),
+            )
+        }
 
         assertEquals(
             setOf(
@@ -966,32 +1072,8 @@ class RoomWakeEventDispatchStoreTest {
             "Lock the recovery implementation's complete declared-method surface",
         )
 
-        val companion = recoveryImplementation.declaredClasses.single()
-        assertEquals("Companion", companion.simpleName)
-        assertEquals("public static final", Modifier.toString(companion.modifiers))
-        assertEquals(
-            listOf(
-                "constructor()V|private|synthetic=false",
-                "constructor(Lkotlin/jvm/internal/DefaultConstructorMarker;)V|public|synthetic=true",
-            ),
-            companion.declaredConstructors.map(::constructorSurface).sorted(),
-            "Lock every companion constructor, including its Kotlin synthetic bridge",
-        )
-
-        assertEquals(
-            setOf(
-                "$" +
-                    "jacocoInit(Ljava/lang/invoke/MethodHandles\$Lookup;Ljava/lang/String;" +
-                    "Ljava/lang/Class;)[Z|private static|synthetic=true|bridge=false",
-                "create" +
-                    "(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;" +
-                    "Lcom/dsalmun/luxalarm/wake/WakeRecoverySlotId;JJ)" +
-                    "Lcom/dsalmun/luxalarm/data/WakeEventArrival;" +
-                    "|public final|synthetic=false|bridge=false",
-            ),
-            companion.declaredMethods.map(::methodSurface).toSet(),
-            "Lock the companion's complete declared-method surface",
-        )
+        assertTrue(recoveryImplementation.declaredClasses.isEmpty())
+        assertTrue(recoveryImplementation.declaredMethods.none { it.name == "create" })
 
         assertFailsWith<ClassNotFoundException> {
             Class.forName("com.dsalmun.luxalarm.data.WakeEventArrival\$Recovery")
@@ -1042,6 +1124,9 @@ class RoomWakeEventDispatchStoreTest {
                         if (cursor.isNull(column)) null else cursor.getString(column)
                     }
             }
+
+    private fun allTablesFingerprint(): List<Any?> =
+        listOf(dispatchFingerprint()) + protectedTablesFingerprint()
 
     private fun protectedTablesFingerprint(): List<String> =
         listOf(

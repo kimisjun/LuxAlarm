@@ -240,8 +240,15 @@ private fun WakeDispatchInput.hasValidArrival(): Boolean {
             WakeRecoverySlotId.B -> slotB
             null -> return true
         }
-    return slot.state in setOf(WakeRecoverySlotState.FIRED, WakeRecoverySlotState.IN_FLIGHT) &&
+    return slot.state in
+        setOf(
+            WakeRecoverySlotState.ARMED,
+            WakeRecoverySlotState.FIRED,
+            WakeRecoverySlotState.IN_FLIGHT,
+        ) &&
         slot.triggerAtEpochMillis == arrivingRecoveryTriggerEpochMillis &&
+        arrivingRecoveryTriggerEpochMillis != null &&
+        arrivingRecoveryTriggerEpochMillis <= nowEpochMillis &&
         slot.token != Long.MAX_VALUE
 }
 

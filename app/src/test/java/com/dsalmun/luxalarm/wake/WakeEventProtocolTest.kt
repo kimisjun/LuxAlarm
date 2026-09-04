@@ -13,6 +13,72 @@ import org.junit.Test
 
 class WakeEventProtocolTest {
     @Test
+    fun earlyExactRecoveryFailsClosedForEveryLiveStateSlotAndMutableOwner() {
+        listOf(WakeScheduleOwner.PREPARING_WAKE, WakeScheduleOwner.WAKE).forEach { owner ->
+            WakeRecoverySlotId.entries.forEach { arrivingSlot ->
+                listOf(
+                        WakeRecoverySlotState.ARMED,
+                        WakeRecoverySlotState.FIRED,
+                        WakeRecoverySlotState.IN_FLIGHT,
+                    )
+                    .forEach { slotState ->
+                        val arriving = WakeRecoverySlot(slotState, 1_001L, 41L)
+                        val input =
+                            input(
+                                scheduleOwner = owner,
+                                arrivingSlot = arrivingSlot,
+                                arrivingRecoveryTriggerEpochMillis = 1_001L,
+                                slotA =
+                                    if (arrivingSlot == WakeRecoverySlotId.A) arriving
+                                    else WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L),
+                                slotB =
+                                    if (arrivingSlot == WakeRecoverySlotId.B) arriving
+                                    else WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L),
+                                nowEpochMillis = 1_000L,
+                            )
+                        val before = input.copy()
+
+                        val result = WakeDispatchReducer.reduce(input)
+
+                        assertEquals(
+                            WakeDispatchAction.FAIL_CLOSED,
+                            result.action,
+                            "$owner/$arrivingSlot/$slotState",
+                        )
+                        assertEquals(null, result.transition, "$owner/$arrivingSlot/$slotState")
+                        assertEquals(before, input, "$owner/$arrivingSlot/$slotState")
+                    }
+            }
+        }
+    }
+
+    @Test
+    fun exactRecoveryIsAcceptedAtItsTriggerForBothMutableOwners() {
+        listOf(
+                WakeScheduleOwner.PREPARING_WAKE to WakeDispatchAction.DEFER,
+                WakeScheduleOwner.WAKE to WakeDispatchAction.REQUEST_DISPATCH,
+            )
+            .forEach { (owner, expectedAction) ->
+                val input =
+                    input(
+                        scheduleOwner = owner,
+                        slotA = WakeRecoverySlot(WakeRecoverySlotState.ARMED, 1_001L, 41L),
+                        arrivingRecoveryTriggerEpochMillis = 1_001L,
+                        nowEpochMillis = 1_001L,
+                    )
+
+                val result = WakeDispatchReducer.reduce(input)
+
+                assertEquals(expectedAction, result.action, owner.name)
+                assertEquals(1_001L, result.transition?.expectedRecoveryTriggerAtEpochMillis)
+                assertEquals(
+                    WakeRecoverySlotState.CONSUMED,
+                    result.transition?.nextRecoverySlotState,
+                )
+            }
+    }
+
+    @Test
     fun recoveryArrivalUsesDeliveredTriggerWithoutChangingPrimaryIdentity() {
         val event = WakeEventIdentity("snapshot", WakeEventKind.START, 1_000L)
         listOf(WakeRecoverySlotId.A to 1_015L, WakeRecoverySlotId.B to 1_030L).forEach {
@@ -28,6 +94,7 @@ class WakeEventProtocolTest {
                             if (arrivingSlot == WakeRecoverySlotId.A) selected else input().slotA,
                         slotB =
                             if (arrivingSlot == WakeRecoverySlotId.B) selected else input().slotB,
+                        nowEpochMillis = deliveredTrigger,
                     )
                 )
 
@@ -230,80 +297,77 @@ class WakeEventProtocolTest {
     }
 
     @Test
-    fun armedArrivingRecoverySlotFailsClosedWithoutMutatingInput() {
-        val input = input(slotA = WakeRecoverySlot(WakeRecoverySlotState.ARMED, 500L, 1L))
-        val before = input.copy()
-
-        val result = WakeDispatchReducer.reduce(input)
-
-        assertEquals(WakeDispatchAction.FAIL_CLOSED, result.action)
-        assertEquals(null, result.transition)
-        assertEquals(before, input)
-    }
-
-    @Test
-    fun firedAndInFlightArrivalsEncodeCompleteCasForBothSlotsAndOwners() {
+    fun armedFiredAndInFlightArrivalsEncodeCompleteCasForBothSlotsAndOwners() {
         listOf(WakeScheduleOwner.PREPARING_WAKE, WakeScheduleOwner.WAKE).forEach { owner ->
             WakeRecoverySlotId.entries.forEach { arrivingSlot ->
-                listOf(WakeRecoverySlotState.FIRED, WakeRecoverySlotState.IN_FLIGHT).forEach {
-                    slotState ->
-                    val arriving = WakeRecoverySlot(slotState, 500L, 41L)
-                    val input =
-                        input(
-                            scheduleOwner = owner,
-                            arrivingSlot = arrivingSlot,
-                            slotA =
-                                if (arrivingSlot == WakeRecoverySlotId.A) {
-                                    arriving
-                                } else {
-                                    WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L)
-                                },
-                            slotB =
-                                if (arrivingSlot == WakeRecoverySlotId.B) {
-                                    arriving
-                                } else {
-                                    WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L)
-                                },
-                        )
-                    val before = input.copy()
-                    val expectedAction =
-                        if (owner == WakeScheduleOwner.PREPARING_WAKE) {
-                            WakeDispatchAction.DEFER
-                        } else {
-                            WakeDispatchAction.REQUEST_DISPATCH
-                        }
-                    val expectedState =
-                        if (owner == WakeScheduleOwner.PREPARING_WAKE) {
-                            WakeDispatchState.DEFERRED
-                        } else {
-                            WakeDispatchState.DISPATCH_REQUESTED
-                        }
-                    val expectedAttempt = if (owner == WakeScheduleOwner.PREPARING_WAKE) 0L else 1L
-
-                    val result = WakeDispatchReducer.reduce(input)
-
-                    assertEquals(expectedAction, result.action, "$owner/$arrivingSlot/$slotState")
-                    assertEquals(
-                        WakeDispatchTransition(
-                            expectedEventKey = input.event.canonicalKey(),
-                            expectedState = WakeDispatchState.RECEIVED,
-                            expectedDispatchAttemptId = 0L,
-                            nextState = expectedState,
-                            nextDispatchAttemptId = expectedAttempt,
-                            needsRecovery = false,
-                            expectedRecoverySlot = arrivingSlot,
-                            expectedRecoverySlotState = slotState,
-                            expectedRecoveryTriggerAtEpochMillis = 500L,
-                            expectedRecoverySlotToken = 41L,
-                            nextRecoverySlotState = WakeRecoverySlotState.CONSUMED,
-                            nextRecoveryTriggerAtEpochMillis = null,
-                            nextRecoverySlotToken = 42L,
-                        ),
-                        result.transition,
-                        "$owner/$arrivingSlot/$slotState",
+                listOf(
+                        WakeRecoverySlotState.ARMED,
+                        WakeRecoverySlotState.FIRED,
+                        WakeRecoverySlotState.IN_FLIGHT,
                     )
-                    assertEquals(before, input)
-                }
+                    .forEach { slotState ->
+                        val arriving = WakeRecoverySlot(slotState, 500L, 41L)
+                        val input =
+                            input(
+                                scheduleOwner = owner,
+                                arrivingSlot = arrivingSlot,
+                                slotA =
+                                    if (arrivingSlot == WakeRecoverySlotId.A) {
+                                        arriving
+                                    } else {
+                                        WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L)
+                                    },
+                                slotB =
+                                    if (arrivingSlot == WakeRecoverySlotId.B) {
+                                        arriving
+                                    } else {
+                                        WakeRecoverySlot(WakeRecoverySlotState.ARMED, 2_000L, 7L)
+                                    },
+                            )
+                        val before = input.copy()
+                        val expectedAction =
+                            if (owner == WakeScheduleOwner.PREPARING_WAKE) {
+                                WakeDispatchAction.DEFER
+                            } else {
+                                WakeDispatchAction.REQUEST_DISPATCH
+                            }
+                        val expectedState =
+                            if (owner == WakeScheduleOwner.PREPARING_WAKE) {
+                                WakeDispatchState.DEFERRED
+                            } else {
+                                WakeDispatchState.DISPATCH_REQUESTED
+                            }
+                        val expectedAttempt =
+                            if (owner == WakeScheduleOwner.PREPARING_WAKE) 0L else 1L
+
+                        val result = WakeDispatchReducer.reduce(input)
+
+                        assertEquals(
+                            expectedAction,
+                            result.action,
+                            "$owner/$arrivingSlot/$slotState",
+                        )
+                        assertEquals(
+                            WakeDispatchTransition(
+                                expectedEventKey = input.event.canonicalKey(),
+                                expectedState = WakeDispatchState.RECEIVED,
+                                expectedDispatchAttemptId = 0L,
+                                nextState = expectedState,
+                                nextDispatchAttemptId = expectedAttempt,
+                                needsRecovery = false,
+                                expectedRecoverySlot = arrivingSlot,
+                                expectedRecoverySlotState = slotState,
+                                expectedRecoveryTriggerAtEpochMillis = 500L,
+                                expectedRecoverySlotToken = 41L,
+                                nextRecoverySlotState = WakeRecoverySlotState.CONSUMED,
+                                nextRecoveryTriggerAtEpochMillis = null,
+                                nextRecoverySlotToken = 42L,
+                            ),
+                            result.transition,
+                            "$owner/$arrivingSlot/$slotState",
+                        )
+                        assertEquals(before, input)
+                    }
             }
         }
     }
@@ -314,7 +378,9 @@ class WakeEventProtocolTest {
             val invalidSlots =
                 WakeRecoverySlotState.entries
                     .filterNot {
-                        it == WakeRecoverySlotState.FIRED || it == WakeRecoverySlotState.IN_FLIGHT
+                        it == WakeRecoverySlotState.ARMED ||
+                            it == WakeRecoverySlotState.FIRED ||
+                            it == WakeRecoverySlotState.IN_FLIGHT
                     }
                     .map { state -> WakeRecoverySlot(state, 500L, 9L) } +
                     listOf(
@@ -589,7 +655,7 @@ class WakeEventProtocolTest {
                 arrivingSlot = WakeRecoverySlotId.B,
                 slotA = slotA,
                 slotB = arrivingSlotB,
-                nowEpochMillis = 1_000L,
+                nowEpochMillis = 1_001L,
             )
         val simultaneousOverdue =
             arrivingB.copy(

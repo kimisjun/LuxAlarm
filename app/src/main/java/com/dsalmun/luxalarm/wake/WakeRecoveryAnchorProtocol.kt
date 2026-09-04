@@ -63,6 +63,48 @@ internal data class WakeRecoveryAnchorDelivery(
     }
 }
 
+/** Opaque verified immutable-anchor identity produced only by the canonical data parser. */
+internal interface VerifiedWakeRecoveryAnchorArrival {
+    val event: WakeEventIdentity
+    val kind: WakeRecoveryAnchorKind
+    val triggerEpochMillis: Long
+    val pendingIntentIdentity: String
+
+    fun deliveryAt(receivedAtEpochMillis: Long): WakeRecoveryAnchorDelivery
+}
+
+/**
+ * Sole construction path used by the receiver boundary after canonical PendingIntent-data parsing.
+ * This is an auditable same-module chokepoint, not cryptographic isolation from hostile reflection.
+ */
+internal object AuthenticatedWakeRecoveryAnchorArrivalFactory {
+    fun fromVerifiedPendingIntentData(
+        event: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+        triggerEpochMillis: Long,
+        pendingIntentIdentity: String,
+    ): VerifiedWakeRecoveryAnchorArrival {
+        require(event.kind == WakeEventKind.GOAL)
+        require(kind.triggerForGoalOrNull(event.expectedTriggerEpochMillis) == triggerEpochMillis)
+        requireCanonicalPendingIntentIdentity(pendingIntentIdentity)
+        return object : VerifiedWakeRecoveryAnchorArrival {
+            override val event = event
+            override val kind = kind
+            override val triggerEpochMillis = triggerEpochMillis
+            override val pendingIntentIdentity = pendingIntentIdentity
+
+            override fun deliveryAt(receivedAtEpochMillis: Long): WakeRecoveryAnchorDelivery =
+                WakeRecoveryAnchorDelivery(
+                    event,
+                    kind,
+                    triggerEpochMillis,
+                    pendingIntentIdentity,
+                    receivedAtEpochMillis,
+                )
+        }
+    }
+}
+
 internal enum class WakeRecoveryAnchorReceiptAction {
     CLAIM_FIRED,
     RESUME_PROCESSING,
