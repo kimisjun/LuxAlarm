@@ -16,7 +16,9 @@ import com.dsalmun.luxalarm.data.WakeEventDispatchEntity
 import com.dsalmun.luxalarm.data.WakeEventStoreOutcome
 import com.dsalmun.luxalarm.data.WakeRunSnapshotEntity
 import com.dsalmun.luxalarm.wake.MAX_CANONICAL_URI_ASCII_CHARS
-import com.dsalmun.luxalarm.wake.MAX_WAKE_OWNER_TOKEN_UTF8_BYTES
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorization
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSourceKind
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
 import com.dsalmun.luxalarm.wake.WakePendingIntentData
@@ -47,41 +49,33 @@ class WakeReceiverTrustBoundaryTest {
     private val event = WakeEventIdentity("receiver-canary", WakeEventKind.START, 1_000L)
 
     @Test
-    fun leaseOwnerTokenIsDeterministicBoundedLowercaseSha256AndSeparatesHashCollisions() {
-        val aa = WakePendingIntentData.primary(WakeEventIdentity("Aa", WakeEventKind.GOAL, 2_000L))
-        val bb = WakePendingIntentData.primary(WakeEventIdentity("BB", WakeEventKind.GOAL, 2_000L))
-        val collisionA =
-            WakePendingIntentData.primary(WakeEventIdentity("rHUio54q", WakeEventKind.GOAL, 2_000L))
-        val collisionB =
-            WakePendingIntentData.primary(WakeEventIdentity("cgztjiQU", WakeEventKind.GOAL, 2_000L))
-
-        val owner = wakeRecoveryLeaseOwner(aa)
-
-        assertEquals(
-            "wake-receiver-v1-9336873bc0bc92a5e39f2b45e8a25046000ac812d2609b43ac65b74b0afbd596",
-            owner,
-        )
-        assertEquals(owner, wakeRecoveryLeaseOwner(aa))
-        assertTrue(owner.length <= MAX_WAKE_OWNER_TOKEN_UTF8_BYTES)
-        assertTrue(owner.matches(Regex("wake-receiver-v1-[0-9a-f]{64}")))
-        assertTrue(wakeRecoveryLeaseOwner(aa) != wakeRecoveryLeaseOwner(bb))
-        assertEquals(collisionA.hashCode(), collisionB.hashCode())
-        assertTrue(wakeRecoveryLeaseOwner(collisionA) != wakeRecoveryLeaseOwner(collisionB))
-    }
-
-    @Test
     fun exactDigestLeaseOwnerReachesDurableFiredAnchorProcessing() {
         val goal = WakeEventIdentity("owner-goal", WakeEventKind.GOAL, 2_000L)
         database.wakeRunStorageDao().createSnapshot(snapshot(goal), 900L)
         insertGoalDispatch(goal)
         val identity = WakePendingIntentData.primary(goal)
         insertAnchor(goal, WakeRecoveryAnchorKind.GOAL_PRIMARY, identity)
-        val expectedOwner = wakeRecoveryLeaseOwner(identity)
+        val expectedSource =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                goal,
+                WakeDispatchSourceKind.GOAL_PRIMARY,
+                identity,
+                2_000L,
+            )
+        val expectedOwner =
+            WakeDispatchAuthorizationFactory.create(
+                    goal,
+                    1L,
+                    1L,
+                    0L,
+                    62_000L,
+                    expectedSource,
+                )
+                .leaseOwner
 
         WakeReceiverRoutingCoordinator(
                 database = database,
                 clock = { 2_000L },
-                ownerFactory = { wakeRecoveryLeaseOwner(it.pendingIntentIdentity) },
             )
             .routeGoal(requireNotNull(WakePendingIntentData.parse(identity)))
 
@@ -105,7 +99,7 @@ class WakeReceiverTrustBoundaryTest {
         database =
             AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
         database.openHelper.writableDatabase.execSQL(
-            "UPDATE migration_state SET schedule_owner = 'WAKE' WHERE id = 1"
+            "UPDATE migration_state SET schedule_owner = 'WAKE', active_generation = 1 WHERE id = 1"
         )
         database.wakeRunStorageDao().createSnapshot(snapshot(), 900L)
     }
@@ -128,6 +122,8 @@ class WakeReceiverTrustBoundaryTest {
             requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
         val otherRowsBefore = databaseFingerprintExceptDispatch(event.canonicalKey())
         val canonical = WakePendingIntentData.dynamic(event, WakeRecoverySlotId.A, 7L, 1_500L)
+        val expectedAuthorization =
+            expectedAuthorization(event, WakeDispatchSourceKind.START_DYNAMIC_A, canonical, 1_500L)
         installActualReceiverRuntime(now = 1_500L)
         val receiver = WakeStartReceiver()
         sendActualReceiver(
@@ -160,8 +156,8 @@ class WakeReceiverTrustBoundaryTest {
                 attemptCount = 1L,
                 lastAttemptAt = 1_500L,
                 failureReason = null,
-                leaseOwner = null,
-                leaseExpiresAt = null,
+                leaseOwner = expectedAuthorization.leaseOwner,
+                leaseExpiresAt = expectedAuthorization.leaseExpiresAt,
                 recoverySlotAAt = null,
                 recoverySlotAState = "CONSUMED",
                 recoverySlotAToken = 8L,
@@ -226,7 +222,7 @@ class WakeReceiverTrustBoundaryTest {
         WakeReceiverRuntime.installForTest(
             executor = queued,
             coordinatorFactory = {
-                WakeReceiverRoutingCoordinator(database, { 1_000L }, { "captured-a" })
+                WakeReceiverRoutingCoordinator(database, { 1_000L })
             },
         )
         val receiver = WakeStartReceiver()
@@ -259,11 +255,13 @@ class WakeReceiverTrustBoundaryTest {
         insertGoalDispatch(goal)
         val identity = WakePendingIntentData.primary(goal)
         insertAnchor(goal, WakeRecoveryAnchorKind.GOAL_PRIMARY, identity)
+        val expectedAuthorization =
+            expectedAuthorization(goal, WakeDispatchSourceKind.GOAL_PRIMARY, identity, 2_000L)
         val queued = QueuedExecutor()
         WakeReceiverRuntime.installForTest(
             executor = queued,
             coordinatorFactory = {
-                WakeReceiverRoutingCoordinator(database, { 2_000L }, { "captured-goal-a" })
+                WakeReceiverRoutingCoordinator(database, { 2_000L })
             },
         )
         val receiver = WakeGoalReceiver()
@@ -283,8 +281,8 @@ class WakeReceiverTrustBoundaryTest {
         assertPendingResultFinished(receiver)
         val row = requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
         assertEquals("DISPATCH_REQUESTED", row.state)
-        assertEquals("captured-goal-a", row.leaseOwner)
-        assertEquals(62_000L, row.leaseExpiresAt)
+        assertEquals(expectedAuthorization.leaseOwner, row.leaseOwner)
+        assertEquals(expectedAuthorization.leaseExpiresAt, row.leaseExpiresAt)
     }
 
     @Test
@@ -292,10 +290,10 @@ class WakeReceiverTrustBoundaryTest {
         val executorA = Executor { it.run() }
         val executorB = Executor { it.run() }
         val factoryA: (Context) -> WakeReceiverRoutingCoordinator = {
-            WakeReceiverRoutingCoordinator(database, { 1L }, { "a" })
+            WakeReceiverRoutingCoordinator(database, { 1L })
         }
         val factoryB: (Context) -> WakeReceiverRoutingCoordinator = {
-            WakeReceiverRoutingCoordinator(database, { 2L }, { "b" })
+            WakeReceiverRoutingCoordinator(database, { 2L })
         }
         WakeReceiverRuntime.resetForTest()
         val defaultConfig = WakeReceiverRuntime.capture()
@@ -341,6 +339,8 @@ class WakeReceiverTrustBoundaryTest {
         insertGoalDispatch(goal)
         val identity = WakePendingIntentData.primary(goal)
         insertAnchor(goal, WakeRecoveryAnchorKind.GOAL_PRIMARY, identity)
+        val expectedAuthorization =
+            expectedAuthorization(goal, WakeDispatchSourceKind.GOAL_PRIMARY, identity, 2_000L)
         val dispatchBefore =
             requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
         val anchorBefore =
@@ -362,8 +362,8 @@ class WakeReceiverTrustBoundaryTest {
             dispatchBefore.copy(
                 state = "DISPATCH_REQUESTED",
                 dispatchAttemptId = 1L,
-                leaseOwner = "actual-receiver-owner",
-                leaseExpiresAt = 62_000L,
+                leaseOwner = expectedAuthorization.leaseOwner,
+                leaseExpiresAt = expectedAuthorization.leaseExpiresAt,
                 attemptCount = 1L,
                 lastAttemptAt = 2_000L,
                 failureReason = null,
@@ -387,6 +387,8 @@ class WakeReceiverTrustBoundaryTest {
         val before = requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
         val statusBefore = requireNotNull(database.wakeEventDispatchDao().status(goal.snapshotId))
         val identity = WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.B, 9L, 2_500L)
+        val expectedAuthorization =
+            expectedAuthorization(goal, WakeDispatchSourceKind.GOAL_DYNAMIC_B, identity, 2_500L)
         installActualReceiverRuntime(now = 2_500L)
         val receiver = WakeGoalReceiver()
 
@@ -403,8 +405,8 @@ class WakeReceiverTrustBoundaryTest {
                 attemptCount = 1L,
                 lastAttemptAt = 2_500L,
                 failureReason = null,
-                leaseOwner = null,
-                leaseExpiresAt = null,
+                leaseOwner = expectedAuthorization.leaseOwner,
+                leaseExpiresAt = expectedAuthorization.leaseExpiresAt,
                 recoverySlotBAt = null,
                 recoverySlotBState = "CONSUMED",
                 recoverySlotBToken = 10L,
@@ -422,6 +424,8 @@ class WakeReceiverTrustBoundaryTest {
         val kind = WakeRecoveryAnchorKind.GOAL_PLUS_1M
         val identity = WakePendingIntentData.anchor(goal, kind)
         insertAnchor(goal, kind, identity, state = "FIRED")
+        val expectedAuthorization =
+            expectedAuthorization(goal, WakeDispatchSourceKind.GOAL_PLUS_1M, identity, 62_000L)
         val dispatchBefore =
             requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
         val anchorBefore =
@@ -440,8 +444,8 @@ class WakeReceiverTrustBoundaryTest {
             dispatchBefore.copy(
                 state = "DISPATCH_REQUESTED",
                 dispatchAttemptId = 1L,
-                leaseOwner = "actual-receiver-owner",
-                leaseExpiresAt = 122_000L,
+                leaseOwner = expectedAuthorization.leaseOwner,
+                leaseExpiresAt = expectedAuthorization.leaseExpiresAt,
                 attemptCount = 1L,
                 lastAttemptAt = 62_000L,
                 failureReason = null,
@@ -552,7 +556,6 @@ class WakeReceiverTrustBoundaryTest {
             WakeReceiverRoutingCoordinator(
                     database = database,
                     clock = { 1_500L },
-                    ownerFactory = { "receiver-owner" },
                 )
                 .routeStart(parsed)
 
@@ -586,8 +589,15 @@ class WakeReceiverTrustBoundaryTest {
                         .match(
                             onPrimary = { _, _ -> error("not primary") },
                             onDynamic = { parsedEvent, arrival ->
+                                val source =
+                                    WakeDispatchAuthorizationFactory.canonicalSource(
+                                        parsedEvent,
+                                        WakeDispatchSourceKind.START_DYNAMIC_A,
+                                        uri,
+                                        1_500L,
+                                    )
                                 RoomWakeEventDispatchStore(database)
-                                    .reduce(parsedEvent, arrival, 1_500L, 500L)
+                                    .reduce(parsedEvent, source, 1_500L, 500L)
                             },
                             onAnchor = { error("not anchor") },
                         )
@@ -779,19 +789,23 @@ class WakeReceiverTrustBoundaryTest {
         val identity = WakePendingIntentData.primary(goal)
         insertAnchor(goal, WakeRecoveryAnchorKind.GOAL_PRIMARY, identity)
 
-        WakeReceiverRoutingCoordinator(
-                database = database,
-                clock = { 2_000L },
-                ownerFactory = { "receiver-goal-owner" },
-            )
-            .routeGoal(requireNotNull(WakePendingIntentData.parse(identity)))
+        val route =
+            WakeReceiverRoutingCoordinator(
+                    database = database,
+                    clock = { 2_000L },
+                )
+                .routeGoal(requireNotNull(WakePendingIntentData.parse(identity)))
+        val expectedAuthorization =
+            expectedAuthorization(goal, WakeDispatchSourceKind.GOAL_PRIMARY, identity, 2_000L)
 
         val dispatch = requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
         assertEquals("DISPATCH_REQUESTED", dispatch.state)
         assertEquals(0, dispatch.armedPrimary)
         assertEquals(1L, dispatch.dispatchAttemptId)
         assertEquals(1L, dispatch.attemptCount)
-        assertEquals("receiver-goal-owner", dispatch.leaseOwner)
+        assertAuthorizationEquals(expectedAuthorization, requireNotNull(route.authorization))
+        assertEquals(expectedAuthorization.leaseOwner, dispatch.leaseOwner)
+        assertEquals(expectedAuthorization.leaseExpiresAt, dispatch.leaseExpiresAt)
         assertEquals(
             "CONSUMED",
             database
@@ -817,16 +831,36 @@ class WakeReceiverTrustBoundaryTest {
                 val trigger =
                     requireNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis))
 
-                WakeReceiverRoutingCoordinator(
-                        database = database,
-                        clock = { trigger },
-                        ownerFactory = { "receiver-anchor-$index" },
-                    )
-                    .routeGoal(requireNotNull(WakePendingIntentData.parse(identity)))
+                val route =
+                    WakeReceiverRoutingCoordinator(
+                            database = database,
+                            clock = { trigger },
+                        )
+                        .routeGoal(requireNotNull(WakePendingIntentData.parse(identity)))
+                val sourceKind =
+                    when (kind) {
+                        WakeRecoveryAnchorKind.GOAL_PLUS_1M -> WakeDispatchSourceKind.GOAL_PLUS_1M
+                        WakeRecoveryAnchorKind.GOAL_PLUS_5M -> WakeDispatchSourceKind.GOAL_PLUS_5M
+                        WakeRecoveryAnchorKind.GOAL_PLUS_15M -> WakeDispatchSourceKind.GOAL_PLUS_15M
+                        else -> error("not a predeadline kind: $kind")
+                    }
+                val expectedAuthorization =
+                    expectedAuthorization(goal, sourceKind, identity, trigger)
 
                 val dispatch =
                     requireNotNull(database.wakeEventDispatchDao().dispatch(goal.canonicalKey()))
                 assertEquals("DISPATCH_REQUESTED", dispatch.state, kind.name)
+                assertAuthorizationEquals(
+                    expectedAuthorization,
+                    requireNotNull(route.authorization),
+                    kind.name,
+                )
+                assertEquals(expectedAuthorization.leaseOwner, dispatch.leaseOwner, kind.name)
+                assertEquals(
+                    expectedAuthorization.leaseExpiresAt,
+                    dispatch.leaseExpiresAt,
+                    kind.name,
+                )
                 assertEquals(1, dispatch.armedPrimary, kind.name)
                 assertEquals(
                     "CONSUMED",
@@ -854,12 +888,13 @@ class WakeReceiverTrustBoundaryTest {
         val deadline =
             requireNotNull(deadlineKind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis))
 
-        WakeReceiverRoutingCoordinator(
-                database = database,
-                clock = { deadline },
-                ownerFactory = { "unused-at-deadline" },
-            )
-            .routeGoal(requireNotNull(WakePendingIntentData.parse(deadlineIdentity)))
+        val route =
+            WakeReceiverRoutingCoordinator(
+                    database = database,
+                    clock = { deadline },
+                )
+                .routeGoal(requireNotNull(WakePendingIntentData.parse(deadlineIdentity)))
+        assertEquals(null, route.authorization)
 
         val status = requireNotNull(database.wakeEventDispatchDao().status(goal.snapshotId))
         assertEquals("NO_CONFIRMATION", status.state)
@@ -983,7 +1018,6 @@ class WakeReceiverTrustBoundaryTest {
         WakeReceiverRoutingCoordinator(
             database = database,
             clock = { now },
-            ownerFactory = { "receiver-test-owner" },
         )
 
     private fun databaseFingerprint(): List<String> =
@@ -1073,10 +1107,49 @@ class WakeReceiverTrustBoundaryTest {
                 WakeReceiverRoutingCoordinator(
                     database = database,
                     clock = { now },
-                    ownerFactory = { "actual-receiver-owner" },
                 )
             },
         )
+    }
+
+    private fun expectedAuthorization(
+        targetEvent: WakeEventIdentity,
+        sourceKind: WakeDispatchSourceKind,
+        identity: String,
+        receivedAt: Long,
+        attempt: Long = 1L,
+    ): WakeDispatchAuthorization {
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                targetEvent,
+                sourceKind,
+                identity,
+                receivedAt,
+            )
+        return WakeDispatchAuthorizationFactory.create(
+            targetEvent,
+            1L,
+            attempt,
+            0L,
+            receivedAt + 60_000L,
+            source,
+        )
+    }
+
+    private fun assertAuthorizationEquals(
+        expected: WakeDispatchAuthorization,
+        actual: WakeDispatchAuthorization,
+        message: String? = null,
+    ) {
+        assertEquals(expected.event, actual.event, message)
+        assertEquals(expected.eventKey, actual.eventKey, message)
+        assertEquals(expected.scheduleGeneration, actual.scheduleGeneration, message)
+        assertEquals(expected.dispatchAttemptId, actual.dispatchAttemptId, message)
+        assertEquals(expected.expectedExecutionEpoch, actual.expectedExecutionEpoch, message)
+        assertEquals(expected.leaseOwner, actual.leaseOwner, message)
+        assertEquals(expected.leaseExpiresAt, actual.leaseExpiresAt, message)
+        assertEquals(expected.requestedAt, actual.requestedAt, message)
+        assertEquals(expected.source, actual.source, message)
     }
 
     private fun sendActualReceiver(receiver: android.content.BroadcastReceiver, intent: Intent) {

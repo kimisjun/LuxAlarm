@@ -4,6 +4,9 @@
  */
 package com.dsalmun.luxalarm.data
 
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorization
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSource
 import com.dsalmun.luxalarm.wake.WakeDispatchState
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
@@ -17,6 +20,8 @@ import com.dsalmun.luxalarm.wake.WakeRecoverySlotState
 import com.dsalmun.luxalarm.wake.WakeRunState
 import com.dsalmun.luxalarm.wake.WakeScheduleOwner
 import com.dsalmun.luxalarm.wake.isValidOwnerToken
+
+private const val DISPATCH_LEASE_MILLIS = 60_000L
 
 internal enum class WakeRecoveryAnchorProcessingOutcome {
     TERMINALIZED_NO_CONFIRMATION,
@@ -43,23 +48,44 @@ internal data class WakeRecoveryAnchorDispatchRequest(
     val leaseExpiresAtEpochMillis: Long,
 )
 
-internal data class WakeRecoveryAnchorProcessingResult(
-    val outcome: WakeRecoveryAnchorProcessingOutcome,
-    val dispatchRequest: WakeRecoveryAnchorDispatchRequest? = null,
-) {
-    val recommendation: WakeRecoveryAnchorProcessingRecommendation =
-        if (outcome == WakeRecoveryAnchorProcessingOutcome.OUT_OF_SCOPE_DEADLINE) {
-            WakeRecoveryAnchorProcessingRecommendation.DEFER_TO_TERMINAL
-        } else {
-            WakeRecoveryAnchorProcessingRecommendation.NONE
-        }
+internal interface WakeRecoveryAnchorProcessingResult {
+    val outcome: WakeRecoveryAnchorProcessingOutcome
+    val dispatchRequest: WakeRecoveryAnchorDispatchRequest?
+    val authorization: WakeDispatchAuthorization?
+    val recommendation: WakeRecoveryAnchorProcessingRecommendation
+}
 
-    init {
-        require(
-            (outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST) ==
-                (dispatchRequest != null)
-        ) {
-            "Only a new dispatch outcome carries exactly one dispatch request"
+/** Sole auditable construction path for anchor-processing result payloads. */
+internal object WakeRecoveryAnchorProcessingResultFactory {
+    fun create(
+        outcome: WakeRecoveryAnchorProcessingOutcome,
+        dispatchRequest: WakeRecoveryAnchorDispatchRequest?,
+        authorization: WakeDispatchAuthorization?,
+    ): WakeRecoveryAnchorProcessingResult {
+        val carriesDispatch = outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST
+        require(carriesDispatch == (authorization != null)) {
+            "Authorization exists exactly for NEW_DISPATCH_REQUEST"
+        }
+        require(carriesDispatch == (dispatchRequest != null)) {
+            "Compatibility request exists exactly for NEW_DISPATCH_REQUEST"
+        }
+        if (authorization != null && dispatchRequest != null) {
+            require(dispatchRequest.eventKey == authorization.eventKey)
+            require(dispatchRequest.dispatchAttemptId == authorization.dispatchAttemptId)
+            require(dispatchRequest.leaseOwner == authorization.leaseOwner)
+            require(dispatchRequest.leaseExpiresAtEpochMillis == authorization.leaseExpiresAt)
+        }
+        val recommendation =
+            if (outcome == WakeRecoveryAnchorProcessingOutcome.OUT_OF_SCOPE_DEADLINE) {
+                WakeRecoveryAnchorProcessingRecommendation.DEFER_TO_TERMINAL
+            } else {
+                WakeRecoveryAnchorProcessingRecommendation.NONE
+            }
+        return object : WakeRecoveryAnchorProcessingResult {
+            override val outcome = outcome
+            override val dispatchRequest = dispatchRequest
+            override val authorization = authorization
+            override val recommendation = recommendation
         }
     }
 }
@@ -243,17 +269,27 @@ private constructor(
 
     fun processFired(
         delivery: WakeRecoveryAnchorDelivery,
-        proposedDispatchLeaseOwner: String,
-        proposedDispatchLeaseExpiresAtEpochMillis: Long,
+        source: WakeDispatchSource,
         maxHeartbeatAgeMillis: Long,
     ): WakeRecoveryAnchorProcessingResult {
-        require(proposedDispatchLeaseOwner.isValidOwnerToken()) {
-            "Proposed dispatch lease owner is invalid"
-        }
-        require(proposedDispatchLeaseExpiresAtEpochMillis > delivery.receivedAtEpochMillis) {
-            "Proposed dispatch lease must expire after receipt"
+        if (
+            source.receivedAt != delivery.receivedAtEpochMillis ||
+                source.canonicalPendingIntentIdentity != delivery.pendingIntentIdentity
+        ) {
+            return resultFailClosed()
         }
         require(maxHeartbeatAgeMillis > 0L) { "Heartbeat age bound must be positive" }
+        val canonicalSource =
+            runCatching {
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        delivery.event,
+                        source.kind,
+                        source.canonicalPendingIntentIdentity,
+                        source.receivedAt,
+                    )
+                }
+                .getOrNull() ?: return resultFailClosed()
+        if (canonicalSource != source) return resultFailClosed()
 
         return database.runInTransaction<WakeRecoveryAnchorProcessingResult> {
             val dao = database.wakeRecoveryAnchorDao()
@@ -277,6 +313,10 @@ private constructor(
                 } catch (_: IllegalArgumentException) {
                     return@runInTransaction resultFailClosed()
                 }
+            if (migration.activeGeneration != snapshot.scheduleGeneration) {
+
+                return@runInTransaction resultFailClosed()
+            }
 
             val exactDelivery = context.anchor.matches(delivery)
             if (!exactDelivery) {
@@ -294,6 +334,7 @@ private constructor(
                     }
                 )
             } catch (_: IllegalArgumentException) {
+
                 return@runInTransaction resultFailClosed()
             }
             if (
@@ -346,27 +387,45 @@ private constructor(
             }
 
             var current = dispatch
+            var authorization: WakeDispatchAuthorization? = null
             if (decision.mutation == DispatchMutation.REQUEST) {
                 if (
                     current.dispatchAttemptId == Long.MAX_VALUE ||
                         current.attemptCount == Long.MAX_VALUE ||
+                        delivery.receivedAtEpochMillis > Long.MAX_VALUE - DISPATCH_LEASE_MILLIS ||
                         (delivery.kind == WakeRecoveryAnchorKind.GOAL_PRIMARY &&
                             current.armedPrimary != 1)
                 ) {
                     return@runInTransaction resultFailClosed()
                 }
+                authorization =
+                    runCatching {
+                            WakeDispatchAuthorizationFactory.create(
+                                delivery.event,
+                                snapshot.scheduleGeneration,
+                                current.dispatchAttemptId + 1L,
+                                status.executionEpoch,
+                                delivery.receivedAtEpochMillis + DISPATCH_LEASE_MILLIS,
+                                source,
+                            )
+                        }
+                        .getOrNull() ?: return@runInTransaction resultFailClosed()
                 faultHook("BEFORE_DISPATCH_CAS")
                 val changed =
                     dao.compareAndSetDispatchRequest(
                         current,
-                        proposedDispatchLeaseOwner,
-                        proposedDispatchLeaseExpiresAtEpochMillis,
+                        authorization.leaseOwner,
+                        authorization.leaseExpiresAt,
                         delivery.receivedAtEpochMillis,
                         clearPrimary = delivery.kind == WakeRecoveryAnchorKind.GOAL_PRIMARY,
                     )
                 if (changed != 1) return@runInTransaction casResult(changed)
                 faultHook("AFTER_DISPATCH_CAS")
                 current = checkNotNull(dao.dispatch(eventKey))
+                check(current.dispatchAttemptId == authorization.dispatchAttemptId)
+                check(current.leaseOwner == authorization.leaseOwner)
+                check(current.leaseExpiresAt == authorization.leaseExpiresAt)
+                check(current.lastAttemptAt == authorization.requestedAt)
             } else if (decision.mutation == DispatchMutation.DEFER) {
                 val changed = dao.compareAndSetReceivedToDeferred(current)
                 if (changed != 1) return@runInTransaction casResult(changed)
@@ -387,17 +446,19 @@ private constructor(
             val anchorChanged = dao.compareAndSetFiredToConsumed(anchor)
             if (anchorChanged != 1) return@runInTransaction casResult(anchorChanged)
             faultHook("AFTER_ANCHOR_CAS")
+            faultHook("BEFORE_RETURN")
 
             if (decision.mutation == DispatchMutation.REQUEST) {
-                val applied = current
-                return@runInTransaction WakeRecoveryAnchorProcessingResult(
+                val exactAuthorization = checkNotNull(authorization)
+                return@runInTransaction WakeRecoveryAnchorProcessingResultFactory.create(
                     WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST,
                     WakeRecoveryAnchorDispatchRequest(
                         eventKey,
-                        applied.dispatchAttemptId,
-                        checkNotNull(applied.leaseOwner),
-                        checkNotNull(applied.leaseExpiresAt),
+                        current.dispatchAttemptId,
+                        checkNotNull(current.leaseOwner),
+                        checkNotNull(current.leaseExpiresAt),
                     ),
+                    exactAuthorization,
                 )
             }
             result(decision.outcome)
@@ -434,14 +495,9 @@ private constructor(
         val currentAnchor = poststate.currentAnchor ?: return resultFailClosed()
         val pureStatus =
             try {
-                require(snapshot.id == miss.delivery.event.snapshotId)
-                require(snapshot.goalEpochMs == miss.delivery.event.expectedTriggerEpochMillis)
-                require(snapshot.scheduleGeneration >= 0L)
-                require(snapshot.routineRevision >= 0L && snapshot.calculationRuleVersion >= 0L)
-                require(snapshot.wakeStartEpochMs >= 0L && snapshot.goalEpochMs >= 0L)
-                require(snapshot.createdAt >= 0L)
+                snapshot.requireCanonicalFor(miss.delivery.event)
                 require(status.snapshotId == snapshot.id)
-                status.toPureStatus()
+                status.toPureWakeRecoveryRunStatus()
             } catch (_: IllegalArgumentException) {
                 return resultFailClosed()
             }
@@ -543,15 +599,10 @@ private constructor(
         val event = delivery.event
         validateDispatchRow(event, dispatch, requireCanonicalLeaseOwner = false)
 
-        require(snapshot.id == event.snapshotId)
-        require(snapshot.goalEpochMs == event.expectedTriggerEpochMillis)
-        require(snapshot.scheduleGeneration >= 0L)
-        require(snapshot.routineRevision >= 0L && snapshot.calculationRuleVersion >= 0L)
-        require(snapshot.wakeStartEpochMs >= 0L && snapshot.goalEpochMs >= 0L)
-        require(snapshot.createdAt >= 0L)
+        snapshot.requireCanonicalFor(event)
 
         require(status.snapshotId == snapshot.id)
-        val canonicalStatus = status.toPureStatus()
+        val canonicalStatus = status.toPureWakeRecoveryRunStatus()
 
         require(migration.id == 1)
         val owner = WakeScheduleOwner.valueOf(migration.scheduleOwner)
@@ -938,29 +989,6 @@ private constructor(
         require(values.all { it == null || it >= 0L })
     }
 
-    private fun WakeRunStatusEntity.toPureStatus(): WakeRecoveryRunStatus =
-        WakeRecoveryRunStatus(
-            state = WakeRunState.valueOf(state),
-            processedStartAtEpochMillis = processedStartAt,
-            processedGoalAtEpochMillis = processedGoalAt,
-            activeServiceOwnerToken = activeServiceOwnerToken,
-            executionEpoch = executionEpoch,
-            serviceLeaseOwner = serviceLeaseOwner,
-            serviceLeaseExpiresAtEpochMillis = serviceLeaseExpiresAt,
-            heartbeatAtEpochMillis = heartbeatAt,
-            armedStart = armedStart.toBooleanFlag(),
-            armedGoal = armedGoal.toBooleanFlag(),
-            startedAtEpochMillis = startedAt,
-            completedAtEpochMillis = completedAt,
-            cancelledAtEpochMillis = cancelledAt,
-            failureReason = failureReason?.let(WakeFailureReason::valueOf),
-        )
-
-    private fun Int.toBooleanFlag(): Boolean {
-        require(this in 0..1)
-        return this == 1
-    }
-
     private fun WakeRecoveryAnchorEntity.toPureRow(
         event: WakeEventIdentity
     ): WakeRecoveryAnchorRow {
@@ -1002,7 +1030,7 @@ private constructor(
     private fun resultFailClosed() = result(WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED)
 
     private fun result(outcome: WakeRecoveryAnchorProcessingOutcome) =
-        WakeRecoveryAnchorProcessingResult(outcome)
+        WakeRecoveryAnchorProcessingResultFactory.create(outcome, null, null)
 
     private data class ValidatedContext(
         val owner: WakeScheduleOwner,

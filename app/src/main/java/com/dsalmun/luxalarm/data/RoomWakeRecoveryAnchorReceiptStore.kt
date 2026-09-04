@@ -6,7 +6,6 @@ package com.dsalmun.luxalarm.data
 
 import com.dsalmun.luxalarm.wake.WakeDispatchState
 import com.dsalmun.luxalarm.wake.WakeEventKind
-import com.dsalmun.luxalarm.wake.WakeFailureReason
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorDelivery
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorReceiptAction
@@ -155,61 +154,40 @@ private constructor(
         dao: WakeRecoveryAnchorDao,
         delivery: WakeRecoveryAnchorDelivery,
         dispatch: WakeEventDispatchEntity,
-    ): ReceiptContext? =
-        runCatching {
-                val event = delivery.event
-                check(dispatch.eventKey == event.canonicalKey())
-                check(dispatch.snapshotId == event.snapshotId)
-                check(WakeEventKind.valueOf(dispatch.eventKind) == WakeEventKind.GOAL)
-                check(dispatch.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
-                check(dispatch.expectedTriggerEpochMs >= 0L)
-                WakeDispatchState.valueOf(dispatch.state)
-                check(dispatch.dispatchAttemptId >= 0L && dispatch.attemptCount >= 0L)
-                check(dispatch.armedPrimary in 0..1)
-                checkNonNegative(dispatch.leaseExpiresAt, dispatch.lastAttemptAt)
-                check((dispatch.leaseOwner == null) == (dispatch.leaseExpiresAt == null))
-                validateSlot(
-                    dispatch.recoverySlotAState,
-                    dispatch.recoverySlotAAt,
-                    dispatch.recoverySlotAToken,
-                )
-                validateSlot(
-                    dispatch.recoverySlotBState,
-                    dispatch.recoverySlotBAt,
-                    dispatch.recoverySlotBToken,
-                )
+    ): ReceiptContext? {
+        // Keep Room reads outside the validation catch: storage failures must remain observable.
+        val event = delivery.event
+        val snapshot = dao.snapshot(event.snapshotId) ?: return null
+        val statusEntity = dao.status(event.snapshotId) ?: return null
+        return try {
+            require(dispatch.eventKey == event.canonicalKey())
+            require(dispatch.snapshotId == event.snapshotId)
+            require(WakeEventKind.valueOf(dispatch.eventKind) == WakeEventKind.GOAL)
+            require(dispatch.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
+            require(dispatch.expectedTriggerEpochMs >= 0L)
+            WakeDispatchState.valueOf(dispatch.state)
+            require(dispatch.dispatchAttemptId >= 0L && dispatch.attemptCount >= 0L)
+            require(dispatch.armedPrimary in 0..1)
+            checkNonNegative(dispatch.leaseExpiresAt, dispatch.lastAttemptAt)
+            require((dispatch.leaseOwner == null) == (dispatch.leaseExpiresAt == null))
+            validateSlot(
+                dispatch.recoverySlotAState,
+                dispatch.recoverySlotAAt,
+                dispatch.recoverySlotAToken,
+            )
+            validateSlot(
+                dispatch.recoverySlotBState,
+                dispatch.recoverySlotBAt,
+                dispatch.recoverySlotBToken,
+            )
 
-                val snapshot = checkNotNull(dao.snapshot(event.snapshotId))
-                check(snapshot.id == event.snapshotId)
-                check(snapshot.goalEpochMs == event.expectedTriggerEpochMillis)
-                check(snapshot.scheduleGeneration >= 0L)
-                check(snapshot.routineRevision >= 0L && snapshot.calculationRuleVersion >= 0L)
-                check(snapshot.wakeStartEpochMs >= 0L && snapshot.goalEpochMs >= 0L)
-                check(snapshot.createdAt >= 0L)
-
-                val statusEntity = checkNotNull(dao.status(event.snapshotId))
-                check(statusEntity.snapshotId == snapshot.id)
-                ReceiptContext(snapshot, statusEntity.toPureStatus())
-            }
-            .getOrNull()
-
-    private fun WakeRunStatusEntity.toPureStatus(): WakeRecoveryRunStatus =
-        WakeRecoveryRunStatus(
-            state = WakeRunState.valueOf(state),
-            processedStartAtEpochMillis = processedStartAt,
-            processedGoalAtEpochMillis = processedGoalAt,
-            activeServiceOwnerToken = activeServiceOwnerToken,
-            executionEpoch = executionEpoch,
-            serviceLeaseOwner = serviceLeaseOwner,
-            serviceLeaseExpiresAtEpochMillis = serviceLeaseExpiresAt,
-            heartbeatAtEpochMillis = heartbeatAt,
-            armedStart = armedStart.toBooleanFlag(),
-            armedGoal = armedGoal.toBooleanFlag(),
-            startedAtEpochMillis = startedAt,
-            completedAtEpochMillis = completedAt,
-            cancelledAtEpochMillis = cancelledAt,
-            failureReason = failureReason?.let(WakeFailureReason::valueOf),
-        )
+            snapshot.requireCanonicalFor(event)
+            require(statusEntity.snapshotId == snapshot.id)
+            ReceiptContext(snapshot, statusEntity.toPureWakeRecoveryRunStatus())
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
 
     private fun WakeRecoveryAnchorEntity.toPureRow(
         delivery: WakeRecoveryAnchorDelivery
@@ -230,18 +208,13 @@ private constructor(
 
     private fun validateSlot(stateText: String, trigger: Long?, token: Long) {
         val state = WakeRecoverySlotState.valueOf(stateText)
-        check(token >= 0L)
-        check(trigger == null || trigger >= 0L)
-        check((state in LIVE_SLOT_STATES) == (trigger != null))
-    }
-
-    private fun Int.toBooleanFlag(): Boolean {
-        check(this in 0..1)
-        return this == 1
+        require(token >= 0L)
+        require(trigger == null || trigger >= 0L)
+        require((state in LIVE_SLOT_STATES) == (trigger != null))
     }
 
     private fun checkNonNegative(vararg epochs: Long?) {
-        check(epochs.all { it == null || it >= 0L })
+        require(epochs.all { it == null || it >= 0L })
     }
 
     private fun result(

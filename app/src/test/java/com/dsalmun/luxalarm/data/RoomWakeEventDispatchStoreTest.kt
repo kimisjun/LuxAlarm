@@ -7,8 +7,13 @@ package com.dsalmun.luxalarm.data
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorization
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSource
+import com.dsalmun.luxalarm.wake.WakeDispatchSourceKind
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakePendingIntentData
 import com.dsalmun.luxalarm.wake.WakeRecoverySlotId
 import java.lang.reflect.Modifier
 import java.util.UUID
@@ -36,6 +41,90 @@ class RoomWakeEventDispatchStoreTest {
     private lateinit var database: AlarmDatabase
     private lateinit var store: RoomWakeEventDispatchStore
     private val event = WakeEventIdentity("dispatch-snapshot", WakeEventKind.START, 1_000L)
+
+    @Test
+    fun primaryCommitsExactLeaseAndReturnsAuthorizationFromPostimage() {
+        insertDispatch(state = "RECEIVED", dispatchAttemptId = 2L, attemptCount = 4L)
+        val identity = WakePendingIntentData.primary(event)
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_PRIMARY,
+                identity,
+                1_100L,
+            )
+
+        val result = store.reduce(event, source, 1_100L, maxHeartbeatAgeMillis = 500L)
+
+        assertEquals(WakeEventStoreOutcome.AUTHORIZED_NEW, result.outcome)
+        val authorization = requireNotNull(result.authorization)
+        val committed =
+            requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
+        assertEquals("DISPATCH_REQUESTED", committed.state)
+        assertEquals(3L, committed.dispatchAttemptId)
+        assertEquals(5L, committed.attemptCount)
+        assertEquals(1_100L, committed.lastAttemptAt)
+        assertEquals(61_100L, committed.leaseExpiresAt)
+        assertEquals(committed.leaseOwner, authorization.leaseOwner)
+        assertEquals(committed.dispatchAttemptId, authorization.dispatchAttemptId)
+        assertEquals(1L, authorization.scheduleGeneration)
+        assertEquals(0L, authorization.expectedExecutionEpoch)
+        assertEquals(source, authorization.source)
+        assertEquals(0, committed.armedPrimary)
+    }
+
+    @Test
+    fun bothDynamicSlotsInEveryLiveStateReturnExactCommittedAuthorization() {
+        WakeRecoverySlotId.entries.forEach { slot ->
+            listOf("ARMED", "FIRED", "IN_FLIGHT").forEach { slotState ->
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+                insertDispatch(
+                    state = "RECEIVED",
+                    slotAAt = if (slot == WakeRecoverySlotId.A) 1_000L else null,
+                    slotAState = if (slot == WakeRecoverySlotId.A) slotState else "CONSUMED",
+                    slotAToken = if (slot == WakeRecoverySlotId.A) 7L else 0L,
+                    slotBAt = if (slot == WakeRecoverySlotId.B) 1_000L else null,
+                    slotBState = if (slot == WakeRecoverySlotId.B) slotState else "CONSUMED",
+                    slotBToken = if (slot == WakeRecoverySlotId.B) 7L else 0L,
+                )
+                val identity = WakePendingIntentData.dynamic(event, slot, 7L, 1_000L)
+                val source =
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        event,
+                        if (slot == WakeRecoverySlotId.A) {
+                            WakeDispatchSourceKind.START_DYNAMIC_A
+                        } else {
+                            WakeDispatchSourceKind.START_DYNAMIC_B
+                        },
+                        identity,
+                        1_100L,
+                    )
+                val expected =
+                    WakeDispatchAuthorizationFactory.create(event, 1L, 1L, 0L, 61_100L, source)
+
+                val result = store.reduce(event, source, 1_100L, 500L)
+
+                assertEquals(
+                    WakeEventStoreOutcome.AUTHORIZED_NEW,
+                    result.outcome,
+                    "$slot/$slotState",
+                )
+                assertAuthorizationEquals(
+                    expected,
+                    requireNotNull(result.authorization),
+                    "$slot/$slotState",
+                )
+                val committed = requireNotNull(result.dispatch)
+                assertEquals(expected.leaseOwner, committed.leaseOwner, "$slot/$slotState")
+                assertEquals(expected.leaseExpiresAt, committed.leaseExpiresAt, "$slot/$slotState")
+                assertEquals(
+                    "CONSUMED",
+                    if (slot == WakeRecoverySlotId.A) committed.recoverySlotAState
+                    else committed.recoverySlotBState,
+                )
+            }
+        }
+    }
 
     @Test
     fun earlyExactRecoveryFailsClosedWithZeroWritesForAllLiveStatesAndBothSlots() {
@@ -247,9 +336,183 @@ class RoomWakeEventDispatchStoreTest {
             AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
         store = RoomWakeEventDispatchStore(database)
         database.openHelper.writableDatabase.execSQL(
-            "UPDATE migration_state SET schedule_owner = 'WAKE' WHERE id = 1"
+            "UPDATE migration_state SET schedule_owner = 'WAKE', active_generation = 1 WHERE id = 1"
         )
         database.wakeRunStorageDao().createSnapshot(snapshot(event.snapshotId), 900L)
+    }
+
+    @Test
+    fun noncanonicalTypedSourcesFailClosedBeforeMutationForPreparingAndWakeOwners() {
+        val goal = WakeEventIdentity(event.snapshotId, WakeEventKind.GOAL, 2_000L)
+        val malformedSources =
+            listOf(
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.START_DYNAMIC_B,
+                    WakePendingIntentData.dynamic(event, WakeRecoverySlotId.A, 7L, 1_000L),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_PRIMARY,
+                    WakePendingIntentData.primary(event),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.START_PRIMARY,
+                    WakePendingIntentData.primary(goal),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.START_DYNAMIC_A,
+                    WakePendingIntentData.primary(event),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.START_DYNAMIC_A,
+                    WakePendingIntentData.dynamic(event, WakeRecoverySlotId.B, 7L, 1_000L),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_DYNAMIC_B,
+                    WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.A, 7L, 1_000L),
+                    1_100L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_DYNAMIC_A,
+                    WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.B, 7L, 1_000L),
+                    1_100L,
+                ),
+            )
+        listOf("PREPARING_WAKE", "WAKE").forEach { owner ->
+            malformedSources.forEachIndexed { index, source ->
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+                database.openHelper.writableDatabase.execSQL(
+                    "UPDATE migration_state SET schedule_owner = ? WHERE id = 1",
+                    arrayOf(owner),
+                )
+                insertDispatch(
+                    state = "RECEIVED",
+                    slotAAt = 1_000L,
+                    slotAState = "FIRED",
+                    slotAToken = 7L,
+                )
+                val before = allTablesFingerprint()
+
+                val result = store.reduce(event, source, 1_100L, 500L)
+
+                assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome, "$owner/$index")
+                assertNull(result.authorization, "$owner/$index")
+                assertEquals(before, allTablesFingerprint(), "$owner/$index")
+            }
+        }
+    }
+
+    @Test
+    fun canonicalStartAndGoalSourcesWithMismatchedReceiptFailClosedWithoutWrites() {
+        val goal = WakeEventIdentity(event.snapshotId, WakeEventKind.GOAL, 2_000L)
+        val cases =
+            listOf(
+                Triple(
+                    event,
+                    WakeDispatchSourceKind.START_PRIMARY,
+                    WakePendingIntentData.primary(event),
+                ),
+                Triple(
+                    event,
+                    WakeDispatchSourceKind.START_DYNAMIC_A,
+                    WakePendingIntentData.dynamic(event, WakeRecoverySlotId.A, 7L, 1_000L),
+                ),
+                Triple(
+                    event,
+                    WakeDispatchSourceKind.START_DYNAMIC_B,
+                    WakePendingIntentData.dynamic(event, WakeRecoverySlotId.B, 7L, 1_000L),
+                ),
+                Triple(
+                    goal,
+                    WakeDispatchSourceKind.GOAL_PRIMARY,
+                    WakePendingIntentData.primary(goal),
+                ),
+                Triple(
+                    goal,
+                    WakeDispatchSourceKind.GOAL_DYNAMIC_A,
+                    WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.A, 7L, 1_000L),
+                ),
+                Triple(
+                    goal,
+                    WakeDispatchSourceKind.GOAL_DYNAMIC_B,
+                    WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.B, 7L, 1_000L),
+                ),
+            )
+        cases.forEach { (candidateEvent, kind, identity) ->
+            val source =
+                WakeDispatchAuthorizationFactory.canonicalSource(
+                    candidateEvent,
+                    kind,
+                    identity,
+                    1_100L,
+                )
+            val before = allTablesFingerprint()
+            val result = store.reduce(candidateEvent, source, 1_101L, 500L)
+            assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome, kind.name)
+            assertNull(result.authorization, kind.name)
+            assertEquals(before, allTablesFingerprint(), kind.name)
+        }
+    }
+
+    @Test
+    fun eventTriggerMustExactlyMatchItsSnapshotTriggerBeforeMutation() {
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE wake_run_snapshot SET wake_start_epoch_ms = 1001 WHERE id = ?",
+            arrayOf(event.snapshotId),
+        )
+        insertDispatch(state = "RECEIVED")
+        val startBefore = allTablesFingerprint()
+
+        val startResult = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
+
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, startResult.outcome)
+        assertNull(startResult.authorization)
+        assertEquals(startBefore, allTablesFingerprint())
+
+        database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE wake_run_snapshot SET wake_start_epoch_ms = 1000, goal_epoch_ms = 2001 WHERE id = ?",
+            arrayOf(event.snapshotId),
+        )
+        val goal = WakeEventIdentity(event.snapshotId, WakeEventKind.GOAL, 2_000L)
+        insertDispatch(
+            state = "RECEIVED",
+            slotAAt = 2_000L,
+            slotAState = "FIRED",
+            slotAToken = 7L,
+            eventIdentity = goal,
+        )
+        val goalSource =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                goal,
+                WakeDispatchSourceKind.GOAL_DYNAMIC_A,
+                WakePendingIntentData.dynamic(goal, WakeRecoverySlotId.A, 7L, 2_000L),
+                2_100L,
+            )
+        val goalBefore = allTablesFingerprint()
+
+        val goalResult = store.reduce(goal, goalSource, 2_100L, 500L)
+
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, goalResult.outcome)
+        assertNull(goalResult.authorization)
+        assertEquals(goalBefore, allTablesFingerprint())
+    }
+
+    @Test
+    fun startEventToleratesAChangedButStillValidGoalSnapshotTrigger() {
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE wake_run_snapshot SET goal_epoch_ms = 2001 WHERE id = ?",
+            arrayOf(event.snapshotId),
+        )
+        insertDispatch(state = "RECEIVED")
+
+        val result = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
+
+        assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome)
     }
 
     @After
@@ -275,30 +538,36 @@ class RoomWakeEventDispatchStoreTest {
             slotBToken = 5L,
         )
 
-        val result =
-            store.reduce(
+        val before = requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
                 event,
-                arrival = WakeEventArrival.Primary,
-                nowEpochMillis = 1_100L,
-                maxHeartbeatAgeMillis = 500L,
+                WakeDispatchSourceKind.START_PRIMARY,
+                WakePendingIntentData.primary(event),
+                1_100L,
             )
+        val result = store.reduce(event, source, 1_100L, 500L)
 
-        assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome)
+        assertEquals(WakeEventStoreOutcome.AUTHORIZED_NEW, result.outcome)
+        val authorization = requireNotNull(result.authorization)
         val row = requireNotNull(result.dispatch)
-        assertEquals("DISPATCH_REQUESTED", row.state)
-        assertEquals(8L, row.dispatchAttemptId)
-        assertEquals(12L, row.attemptCount)
-        assertEquals(1_100L, row.lastAttemptAt)
-        assertNull(row.leaseOwner)
-        assertNull(row.leaseExpiresAt)
-        assertNull(row.failureReason)
-        assertEquals(0, row.armedPrimary)
-        assertEquals(2_000L, row.recoverySlotAAt)
-        assertEquals("ARMED", row.recoverySlotAState)
-        assertEquals(3L, row.recoverySlotAToken)
-        assertNull(row.recoverySlotBAt)
-        assertEquals("CONSUMED", row.recoverySlotBState)
-        assertEquals(5L, row.recoverySlotBToken)
+        assertEquals(
+            before.copy(
+                state = "DISPATCH_REQUESTED",
+                dispatchAttemptId = 8L,
+                attemptCount = 12L,
+                lastAttemptAt = 1_100L,
+                leaseOwner = authorization.leaseOwner,
+                leaseExpiresAt = 61_100L,
+                failureReason = null,
+                armedPrimary = 0,
+            ),
+            row,
+        )
+        assertEquals(
+            WakeDispatchAuthorizationFactory.create(event, 1L, 8L, 0L, 61_100L, source).leaseOwner,
+            authorization.leaseOwner,
+        )
     }
 
     @Test
@@ -367,32 +636,38 @@ class RoomWakeEventDispatchStoreTest {
             slotBToken = 5L,
         )
 
-        val result =
-            store.reduce(
+        val before = requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
                 event,
-                recoveryArrival(
-                    WakeRecoverySlotId.B,
-                    deliveredToken = 5L,
-                    deliveredTriggerEpochMillis = 1_000L,
-                ),
-                nowEpochMillis = 1_100L,
-                maxHeartbeatAgeMillis = 500L,
+                WakeDispatchSourceKind.START_DYNAMIC_B,
+                WakePendingIntentData.dynamic(event, WakeRecoverySlotId.B, 5L, 1_000L),
+                1_100L,
             )
+        val result = store.reduce(event, source, 1_100L, 500L)
 
-        assertEquals(WakeEventStoreOutcome.APPLIED, result.outcome)
+        assertEquals(WakeEventStoreOutcome.AUTHORIZED_NEW, result.outcome)
+        val authorization = requireNotNull(result.authorization)
         val row = requireNotNull(result.dispatch)
-        assertEquals("DISPATCH_REQUESTED", row.state)
-        assertEquals(3L, row.dispatchAttemptId)
-        assertEquals(4L, row.attemptCount)
-        assertEquals(1_100L, row.lastAttemptAt)
-        assertNull(row.leaseOwner)
-        assertNull(row.leaseExpiresAt)
-        assertNull(row.failureReason)
-        assertEquals("ARMED", row.recoverySlotAState)
-        assertEquals(8L, row.recoverySlotAToken)
-        assertEquals("CONSUMED", row.recoverySlotBState)
-        assertNull(row.recoverySlotBAt)
-        assertEquals(6L, row.recoverySlotBToken)
+        assertEquals(
+            before.copy(
+                state = "DISPATCH_REQUESTED",
+                dispatchAttemptId = 3L,
+                attemptCount = 4L,
+                lastAttemptAt = 1_100L,
+                leaseOwner = authorization.leaseOwner,
+                leaseExpiresAt = 61_100L,
+                failureReason = null,
+                recoverySlotBState = "CONSUMED",
+                recoverySlotBAt = null,
+                recoverySlotBToken = 6L,
+            ),
+            row,
+        )
+        assertEquals(
+            WakeDispatchAuthorizationFactory.create(event, 1L, 3L, 0L, 61_100L, source).leaseOwner,
+            authorization.leaseOwner,
+        )
     }
 
     @Test
@@ -446,6 +721,85 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
+    fun differentDynamicArrivalDuringActiveLeaseReturnsNoAuthorizationAndLeavesMarkerUnconsumed() {
+        insertDispatch(
+            state = "DISPATCH_REQUESTED",
+            dispatchAttemptId = 3L,
+            attemptCount = 4L,
+            leaseOwner = "active-owner",
+            leaseExpiresAt = 2_000L,
+            slotAAt = 1_000L,
+            slotAState = "FIRED",
+            slotAToken = 7L,
+        )
+        val identity = WakePendingIntentData.dynamic(event, WakeRecoverySlotId.A, 7L, 1_000L)
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_DYNAMIC_A,
+                identity,
+                1_100L,
+            )
+        val before = allTablesFingerprint()
+
+        val result = store.reduce(event, source, 1_100L, 500L)
+
+        assertEquals(WakeEventStoreOutcome.NO_OP_ACTIVE_DISPATCH, result.outcome)
+        assertNull(result.authorization)
+        assertNull(result.convergence)
+        assertEquals(before, allTablesFingerprint())
+        val dispatch = requireNotNull(result.dispatch)
+        assertEquals("FIRED", dispatch.recoverySlotAState)
+        assertEquals(7L, dispatch.recoverySlotAToken)
+    }
+
+    @Test
+    fun activeGenerationMismatchAndTerminalRunStatusAreZeroWriteTypedResults() {
+        insertDispatch(state = "RECEIVED")
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE migration_state SET active_generation = 2 WHERE id = 1"
+        )
+        val mismatchBefore = allTablesFingerprint()
+        val mismatch = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, mismatch.outcome)
+        assertNull(mismatch.authorization)
+        assertEquals(mismatchBefore, allTablesFingerprint())
+
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE migration_state SET active_generation = 1 WHERE id = 1"
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE wake_run_status SET state = 'COMPLETED', completed_at = 1050 WHERE snapshot_id = ?",
+            arrayOf(event.snapshotId),
+        )
+        val terminalBefore = allTablesFingerprint()
+        val terminal = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
+        assertEquals(WakeEventStoreOutcome.NO_OP_TERMINAL, terminal.outcome)
+        assertNull(terminal.authorization)
+        assertEquals(terminalBefore, allTablesFingerprint())
+    }
+
+    @Test
+    fun dispatchLeaseExpiryOverflowFailsClosedWithoutAnyWrite() {
+        insertDispatch(state = "RECEIVED")
+        val receivedAt = Long.MAX_VALUE - 59_999L
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_PRIMARY,
+                WakePendingIntentData.primary(event),
+                receivedAt,
+            )
+        val before = allTablesFingerprint()
+
+        val result = store.reduce(event, source, receivedAt, 500L)
+
+        assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome)
+        assertNull(result.authorization)
+        assertEquals(before, allTablesFingerprint())
+    }
+
+    @Test
     fun legacyAndRestoringFailClosedWithoutMutation() {
         listOf("LEGACY", "RESTORING").forEachIndexed { index, owner ->
             if (index > 0)
@@ -474,7 +828,7 @@ class RoomWakeEventDispatchStoreTest {
         val primaryApplied = dispatchFingerprint()
 
         assertEquals(
-            WakeEventStoreOutcome.CONVERGED,
+            WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
             store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L).outcome,
         )
         assertEquals(primaryApplied, dispatchFingerprint())
@@ -501,7 +855,7 @@ class RoomWakeEventDispatchStoreTest {
         val recoveryApplied = dispatchFingerprint()
 
         assertEquals(
-            WakeEventStoreOutcome.CONVERGED,
+            WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
             store.reduce(event, slotA, 1_100L, 500L).outcome,
         )
         assertEquals(recoveryApplied, dispatchFingerprint())
@@ -581,8 +935,8 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
-    fun injectedFaultsBeforeAndAfterCasRollBackAllDispatchColumns() {
-        listOf("BEFORE_CAS", "AFTER_CAS").forEachIndexed { index, point ->
+    fun injectedFaultsBeforeAfterCasAndBeforeReturnRollBackAllParticipatingTables() {
+        listOf("BEFORE_CAS", "AFTER_CAS", "BEFORE_RETURN").forEachIndexed { index, point ->
             if (index > 0)
                 database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
             insertDispatch(
@@ -596,7 +950,7 @@ class RoomWakeEventDispatchStoreTest {
                 slotAState = "ARMED",
                 slotAToken = 6L,
             )
-            val before = dispatchFingerprint()
+            val before = allTablesFingerprint()
             val faulting =
                 WakeEventDispatchStoreFaultFixture.create(database) {
                     if (it == point) error("injected-$point")
@@ -605,7 +959,7 @@ class RoomWakeEventDispatchStoreTest {
             assertFailsWith<IllegalStateException> {
                 faulting.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
             }
-            assertEquals(before, dispatchFingerprint())
+            assertEquals(before, allTablesFingerprint())
         }
     }
 
@@ -674,8 +1028,17 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
-    fun twoConcurrentPrimaryCallersApplyExactlyOnceAndConverge() {
+    fun twoConcurrentPrimaryCallersReturnExactlyOneAuthorizationAndTypedConvergence() {
         insertDispatch(state = "RECEIVED", dispatchAttemptId = 4L, attemptCount = 6L)
+        val identity = WakePendingIntentData.primary(event)
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_PRIMARY,
+                identity,
+                1_100L,
+            )
+        val expected = WakeDispatchAuthorizationFactory.create(event, 1L, 5L, 0L, 61_100L, source)
         val executor = Executors.newFixedThreadPool(2)
         try {
             val start = CountDownLatch(1)
@@ -684,21 +1047,27 @@ class RoomWakeEventDispatchStoreTest {
                     executor.submit(
                         Callable {
                             start.await()
-                            RoomWakeEventDispatchStore(database)
-                                .reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
-                                .outcome
+                            RoomWakeEventDispatchStore(database).reduce(event, source, 1_100L, 500L)
                         }
                     )
                 }
             start.countDown()
-            val outcomes = calls.map { it.get(10, TimeUnit.SECONDS) }
+            val results = calls.map { it.get(10, TimeUnit.SECONDS) }
 
-            assertEquals(1, outcomes.count { it == WakeEventStoreOutcome.APPLIED })
-            assertEquals(1, outcomes.count { it == WakeEventStoreOutcome.CONVERGED })
+            val winner = results.single { it.outcome == WakeEventStoreOutcome.AUTHORIZED_NEW }
+            val loser = results.single {
+                it.outcome == WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE
+            }
+            assertAuthorizationEquals(expected, requireNotNull(winner.authorization), "winner")
+            assertNull(loser.authorization)
+            assertEquals(WakeEventConvergence.ALREADY_CONSUMED, loser.convergence)
+            assertEquals(1, results.count { it.authorization != null })
             val row = requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
             assertEquals(5L, row.dispatchAttemptId)
             assertEquals(7L, row.attemptCount)
             assertEquals(1_100L, row.lastAttemptAt)
+            assertEquals(expected.leaseOwner, row.leaseOwner)
+            assertEquals(expected.leaseExpiresAt, row.leaseExpiresAt)
         } finally {
             executor.shutdown()
             assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS))
@@ -718,7 +1087,7 @@ class RoomWakeEventDispatchStoreTest {
         val applied = dispatchFingerprint()
 
         assertEquals(
-            WakeEventStoreOutcome.CONVERGED,
+            WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
             store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L).outcome,
         )
         assertEquals(applied, dispatchFingerprint())
@@ -735,7 +1104,7 @@ class RoomWakeEventDispatchStoreTest {
 
         val duplicate = store.reduce(event, WakeEventArrival.Primary, 9_999L, 500L)
 
-        assertEquals(WakeEventStoreOutcome.CONVERGED, duplicate.outcome)
+        assertEquals(WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE, duplicate.outcome)
         assertEquals(WakeEventConvergence.ALREADY_CONSUMED, duplicate.convergence)
         assertEquals(applied, dispatchFingerprint())
     }
@@ -745,7 +1114,7 @@ class RoomWakeEventDispatchStoreTest {
         insertDispatch(state = "RECEIVED", armedPrimary = 0)
         val consumed = dispatchFingerprint()
         val duplicate = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
-        assertEquals(WakeEventStoreOutcome.CONVERGED, duplicate.outcome)
+        assertEquals(WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE, duplicate.outcome)
         assertEquals(WakeEventConvergence.ALREADY_CONSUMED, duplicate.convergence)
         assertEquals(consumed, dispatchFingerprint())
 
@@ -786,7 +1155,7 @@ class RoomWakeEventDispatchStoreTest {
                 1_100L,
                 500L,
             )
-        assertEquals(WakeEventStoreOutcome.CONVERGED, exact.outcome)
+        assertEquals(WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE, exact.outcome)
         assertEquals(WakeEventConvergence.ALREADY_CONSUMED, exact.convergence)
         assertEquals(exactBefore, dispatchFingerprint())
 
@@ -862,7 +1231,7 @@ class RoomWakeEventDispatchStoreTest {
                 500L,
             )
 
-        assertEquals(WakeEventStoreOutcome.CONVERGED, result.outcome)
+        assertEquals(WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE, result.outcome)
         assertEquals(WakeEventConvergence.ALREADY_CONSUMED, result.convergence)
         assertEquals(before, dispatchFingerprint())
     }
@@ -898,71 +1267,253 @@ class RoomWakeEventDispatchStoreTest {
     }
 
     @Test
-    fun actualDaoCasReturnsZeroAndLeavesEntireRowUnchangedForEveryStaleFence() {
-        data class StaleFence(
+    fun casLoserPerformsBoundedConvergenceRereadAndReturnsNoAuthorization() {
+        insertDispatch(state = "RECEIVED", dispatchAttemptId = 4L, attemptCount = 6L)
+        val identity = WakePendingIntentData.primary(event)
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_PRIMARY,
+                identity,
+                1_100L,
+            )
+        val committedAuthorization =
+            WakeDispatchAuthorizationFactory.create(event, 1L, 5L, 0L, 61_100L, source)
+        var beforeCasHits = 0
+        val losingStore =
+            WakeEventDispatchStoreFaultFixture.create(database) { point ->
+                if (point == "BEFORE_CAS") {
+                    beforeCasHits += 1
+                    database.openHelper.writableDatabase.execSQL(
+                        """
+                        UPDATE wake_event_dispatch
+                        SET state='DISPATCH_REQUESTED', dispatch_attempt_id=5, attempt_count=7,
+                          last_attempt_at=1100, failure_reason=NULL, armed_primary=0,
+                          lease_owner=?, lease_expires_at=61100
+                        WHERE event_key=?
+                        """
+                            .trimIndent(),
+                        arrayOf(committedAuthorization.leaseOwner, event.canonicalKey()),
+                    )
+                }
+            }
+
+        val result = losingStore.reduce(event, source, 1_100L, 500L)
+
+        assertEquals(1, beforeCasHits)
+        assertEquals(WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE, result.outcome)
+        assertEquals(WakeEventConvergence.ALREADY_CONSUMED, result.convergence)
+        assertNull(result.authorization)
+        assertEquals(committedAuthorization.leaseOwner, result.dispatch?.leaseOwner)
+        assertEquals(committedAuthorization.leaseExpiresAt, result.dispatch?.leaseExpiresAt)
+    }
+
+    @Test
+    fun storeCasLossFromEveryMutatedPreimageColumnNeverWritesAgainOrReturnsAuthorization() {
+        data class ConcurrentMutation(
             val name: String,
-            val armedPrimary: Int = 1,
-            val primaryArrival: Boolean = true,
-            val arrivingSlot: String? = null,
-            val expectedState: String = "RECEIVED",
-            val expectedAttempt: Long = 5L,
-            val expectedSlotState: String? = null,
-            val expectedSlotTrigger: Long? = null,
-            val actualSlotToken: Long = 10L,
-            val expectedSlotToken: Long? = null,
+            val assignment: String,
+            val arguments: Array<Any?> = emptyArray(),
+            val outcome: WakeEventStoreOutcome,
         )
+        database.wakeRunStorageDao().createSnapshot(snapshot("alternate-snapshot"), 900L)
+        database.openHelper.writableDatabase.execSQL("PRAGMA ignore_check_constraints = ON")
         val cases =
             listOf(
-                StaleFence("state", expectedState = "DEFERRED"),
-                StaleFence("attempt", expectedAttempt = 4L),
-                StaleFence("primary marker", armedPrimary = 0),
-                StaleFence(
-                    "recovery token",
-                    primaryArrival = false,
-                    arrivingSlot = "A",
-                    expectedSlotState = "FIRED",
-                    expectedSlotTrigger = 1_000L,
-                    expectedSlotToken = 9L,
+                ConcurrentMutation(
+                    "event_key",
+                    "event_key = event_key || '-changed'",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "snapshot_id",
+                    "snapshot_id = ?",
+                    arrayOf("alternate-snapshot"),
+                    WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "event_kind",
+                    "event_kind = 'GOAL'",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "expected_trigger",
+                    "expected_trigger_epoch_ms = 1001",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "state",
+                    "state = 'DEFERRED'",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "dispatch_attempt_id",
+                    "dispatch_attempt_id = 6",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "lease_owner_nonnull_to_null",
+                    "lease_owner = NULL",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "lease_expiry_nonnull_to_null",
+                    "lease_expires_at = NULL",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "attempt_count",
+                    "attempt_count = 6",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "last_attempt_at_null_to_nonnull",
+                    "last_attempt_at = 999",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "failure_reason_nonnull_to_null",
+                    "failure_reason = NULL",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "armed_primary",
+                    "armed_primary = 0",
+                    outcome = WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
+                ),
+                ConcurrentMutation(
+                    "slot_a_trigger_nonnull_to_null",
+                    "recovery_slot_a_at = NULL",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "slot_a_state",
+                    "recovery_slot_a_state = 'IN_FLIGHT'",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "slot_a_token",
+                    "recovery_slot_a_token = 9",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "slot_b_trigger_null_to_nonnull",
+                    "recovery_slot_b_at = 3000",
+                    outcome = WakeEventStoreOutcome.FAIL_CLOSED,
+                ),
+                ConcurrentMutation(
+                    "slot_b_state",
+                    "recovery_slot_b_state = 'CANCELLED'",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
+                ),
+                ConcurrentMutation(
+                    "slot_b_token",
+                    "recovery_slot_b_token = 12",
+                    outcome = WakeEventStoreOutcome.STALE_RETRY_REQUIRED,
                 ),
             )
 
         cases.forEachIndexed { index, case ->
-            if (index > 0)
+            if (index > 0) {
                 database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+            }
             insertDispatch(
                 state = "RECEIVED",
                 dispatchAttemptId = 5L,
-                attemptCount = 7L,
-                armedPrimary = case.armedPrimary,
+                attemptCount = 5L,
+                leaseOwner = "old-owner",
+                leaseExpiresAt = 900L,
+                failureReason = "old-failure",
                 slotAAt = 1_000L,
                 slotAState = "FIRED",
-                slotAToken = case.actualSlotToken,
+                slotAToken = 8L,
+                slotBState = "CONSUMED",
+                slotBToken = 11L,
             )
-            val before = dispatchFingerprint()
+            var beforeCasHits = 0
+            var afterConcurrentMutation: List<Any?>? = null
+            val faulting =
+                WakeEventDispatchStoreFaultFixture.create(database) { point ->
+                    if (point == "BEFORE_CAS") {
+                        beforeCasHits += 1
+                        database.openHelper.writableDatabase.execSQL(
+                            "UPDATE wake_event_dispatch SET ${case.assignment}",
+                            case.arguments,
+                        )
+                        afterConcurrentMutation = allTablesFingerprint()
+                    }
+                }
 
-            val changed =
-                database
-                    .wakeEventDispatchDao()
-                    .compareAndSet(
-                        eventKey = event.canonicalKey(),
-                        expectedState = case.expectedState,
-                        expectedDispatchAttemptId = case.expectedAttempt,
-                        primaryArrival = case.primaryArrival,
-                        arrivingSlot = case.arrivingSlot,
-                        expectedSlotState = case.expectedSlotState,
-                        expectedSlotTrigger = case.expectedSlotTrigger,
-                        expectedSlotToken = case.expectedSlotToken,
-                        nextState = "DISPATCH_REQUESTED",
-                        nextDispatchAttemptId = 6L,
-                        nextSlotState = "CONSUMED",
-                        nextSlotTrigger = null,
-                        nextSlotToken = 11L,
-                        requestDispatch = true,
-                        nowEpochMillis = 1_100L,
-                    )
+            val result = faulting.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
 
-            assertEquals(0, changed, case.name)
-            assertEquals(before, dispatchFingerprint(), case.name)
+            assertEquals(1, beforeCasHits, case.name)
+            assertEquals(case.outcome, result.outcome, case.name)
+            assertNull(result.authorization, case.name)
+            assertEquals(afterConcurrentMutation, allTablesFingerprint(), case.name)
+        }
+    }
+
+    @Test
+    fun actualDaoCasFencesEveryFullPreimageColumnWithNullSafeEquality() {
+        val stalePreimages =
+            listOf<Pair<String, (WakeEventDispatchEntity) -> WakeEventDispatchEntity>>(
+                "event_key" to { it.copy(eventKey = "${it.eventKey}-stale") },
+                "snapshot_id" to { it.copy(snapshotId = "stale-snapshot") },
+                "event_kind" to { it.copy(eventKind = "GOAL") },
+                "expected_trigger" to { it.copy(expectedTriggerEpochMs = 1_001L) },
+                "state" to { it.copy(state = "DEFERRED") },
+                "dispatch_attempt_id" to { it.copy(dispatchAttemptId = 4L) },
+                "lease_owner_nonnull_to_null" to { it.copy(leaseOwner = null) },
+                "lease_expiry_nonnull_to_null" to { it.copy(leaseExpiresAt = null) },
+                "attempt_count" to { it.copy(attemptCount = 6L) },
+                "last_attempt_at_null_to_nonnull" to { it.copy(lastAttemptAt = 999L) },
+                "failure_reason_nonnull_to_null" to { it.copy(failureReason = null) },
+                "armed_primary" to { it.copy(armedPrimary = 0) },
+                "slot_a_trigger_nonnull_to_null" to { it.copy(recoverySlotAAt = null) },
+                "slot_a_state" to { it.copy(recoverySlotAState = "IN_FLIGHT") },
+                "slot_a_token" to { it.copy(recoverySlotAToken = 9L) },
+                "slot_b_trigger_null_to_nonnull" to { it.copy(recoverySlotBAt = 3_000L) },
+                "slot_b_state" to { it.copy(recoverySlotBState = "ARMED") },
+                "slot_b_token" to { it.copy(recoverySlotBToken = 12L) },
+            )
+
+        stalePreimages.forEachIndexed { index, (name, mutate) ->
+            if (index > 0) {
+                database.openHelper.writableDatabase.execSQL("DELETE FROM wake_event_dispatch")
+            }
+            insertDispatch(
+                state = "RECEIVED",
+                dispatchAttemptId = 5L,
+                attemptCount = 5L,
+                leaseOwner = "old-owner",
+                leaseExpiresAt = 900L,
+                failureReason = "old-failure",
+                slotAAt = 1_000L,
+                slotAState = "FIRED",
+                slotAToken = 8L,
+                slotBState = "CONSUMED",
+                slotBToken = 11L,
+            )
+            val actual =
+                requireNotNull(database.wakeEventDispatchDao().dispatch(event.canonicalKey()))
+            val staleExpected = mutate(actual)
+            val proposed =
+                actual.copy(
+                    state = "DISPATCH_REQUESTED",
+                    dispatchAttemptId = 6L,
+                    leaseOwner = "proposed-owner",
+                    leaseExpiresAt = 61_100L,
+                    attemptCount = 6L,
+                    lastAttemptAt = 1_100L,
+                    failureReason = null,
+                    armedPrimary = 0,
+                )
+            val before = allTablesFingerprint()
+
+            val changed = daoCompareAndSet(staleExpected, proposed)
+
+            assertEquals(0, changed, name)
+            assertEquals(before, allTablesFingerprint(), name)
         }
     }
 
@@ -1089,9 +1640,189 @@ class RoomWakeEventDispatchStoreTest {
 
         assertEquals(1, accessible.size)
         assertEquals(listOf(AlarmDatabase::class.java), accessible.single().parameterTypes.toList())
+
+        val reduceMethods =
+            RoomWakeEventDispatchStore::class.java.declaredMethods.filter {
+                it.name == "reduce" && Modifier.isPublic(it.modifiers)
+            }
+        assertEquals(1, reduceMethods.size)
+        assertEquals(
+            listOf(
+                WakeEventIdentity::class.java,
+                WakeDispatchSource::class.java,
+                Long::class.javaPrimitiveType,
+                Long::class.javaPrimitiveType,
+            ),
+            reduceMethods.single().parameterTypes.toList(),
+        )
     }
 
+    @Test
+    fun eventStoreResultHasOpaqueJvmShapeAndFactoryRejectsImpossiblePayloads() {
+        assertTrue(WakeEventStoreResult::class.java.isInterface)
+        assertTrue(WakeEventStoreResult::class.java.declaredConstructors.isEmpty())
+        assertTrue(
+            WakeEventStoreResult::class.java.declaredMethods.none {
+                it.name == "copy" || it.name == "copy\$default" || it.isSynthetic || it.isBridge
+            }
+        )
+
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                event,
+                WakeDispatchSourceKind.START_PRIMARY,
+                WakePendingIntentData.primary(event),
+                1_100L,
+            )
+        val authorization =
+            WakeDispatchAuthorizationFactory.create(event, 1L, 1L, 0L, 61_100L, source)
+        WakeEventStoreOutcome.entries.forEach { outcome ->
+            val convergence =
+                if (outcome == WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE) {
+                    WakeEventConvergence.ALREADY_CONSUMED
+                } else null
+            val exactAuthorization =
+                if (outcome == WakeEventStoreOutcome.AUTHORIZED_NEW) authorization else null
+            val result =
+                WakeEventStoreResultFactory.create(outcome, null, convergence, exactAuthorization)
+            assertEquals(exactAuthorization, result.authorization, outcome.name)
+            assertEquals(convergence, result.convergence, outcome.name)
+
+            assertFailsWith<IllegalArgumentException>(outcome.name) {
+                WakeEventStoreResultFactory.create(
+                    outcome,
+                    null,
+                    convergence,
+                    if (exactAuthorization == null) authorization else null,
+                )
+            }
+            assertFailsWith<IllegalArgumentException>(outcome.name) {
+                WakeEventStoreResultFactory.create(
+                    outcome,
+                    null,
+                    if (convergence == null) WakeEventConvergence.ALREADY_CONSUMED else null,
+                    exactAuthorization,
+                )
+            }
+        }
+        WakeEventStoreResultFactory::class.java.declaredMethods.forEach { method ->
+            assertFalse(method.name.contains("default"), method.toString())
+            assertFalse(method.isBridge, method.toString())
+        }
+    }
+
+    @Test
+    fun malformedCanonicalSnapshotAndRunStatusFailClosedWithoutAnyWriteOrAuthorization() {
+        val snapshotCorruptions =
+            listOf(
+                "UPDATE wake_run_snapshot SET occurrence_id=''",
+                "UPDATE wake_run_snapshot SET schedule_generation=-1",
+                "UPDATE wake_run_snapshot SET routine_revision=-1",
+                "UPDATE wake_run_snapshot SET calculation_rule_version=-1",
+                "UPDATE wake_run_snapshot SET zone_id=''",
+                "UPDATE wake_run_snapshot SET zone_id='BOGUS/ZONE'",
+                "UPDATE wake_run_snapshot SET occurrence_local_date=''",
+                "UPDATE wake_run_snapshot SET occurrence_local_date='not-a-date'",
+                "UPDATE wake_run_snapshot SET wake_start_epoch_ms=-1",
+                "UPDATE wake_run_snapshot SET goal_epoch_ms=-1",
+                "UPDATE wake_run_snapshot SET wake_start_epoch_ms=2001,goal_epoch_ms=2000",
+                "UPDATE wake_run_snapshot SET light_payload=''",
+                "UPDATE wake_run_snapshot SET music_payload=''",
+                "UPDATE wake_run_snapshot SET vibration_payload=''",
+                "UPDATE wake_run_snapshot SET dismissal='BOGUS'",
+                "UPDATE wake_run_snapshot SET created_at=-1",
+                "UPDATE wake_run_snapshot SET install_epoch=''",
+                "UPDATE wake_run_snapshot SET selected_track_id=NULL,selected_track_storage_key='orphan'",
+            )
+        val statusCorruptions =
+            listOf(
+                "UPDATE wake_run_status SET state='BOGUS'",
+                "UPDATE wake_run_status SET execution_epoch=-1",
+                "UPDATE wake_run_status SET armed_start=2",
+                "UPDATE wake_run_status SET armed_goal=-1",
+                "UPDATE wake_run_status SET state='ACTIVE',completed_at=1100",
+                "UPDATE wake_run_status SET state='ACTIVE',failure_reason='NO_CONFIRMATION_DEADLINE'",
+                "UPDATE wake_run_status SET heartbeat_at=1000",
+                "UPDATE wake_run_status SET service_lease_owner='owner',service_lease_expires_at=NULL",
+                "UPDATE wake_run_status SET state='COMPLETED',completed_at=1100,active_service_owner_token='owner'",
+                "UPDATE wake_run_status SET state='COMPLETED',completed_at=1100,service_lease_owner='owner',service_lease_expires_at=2000",
+                "UPDATE wake_run_status SET state='COMPLETED',completed_at=1100,armed_start=1",
+                "UPDATE wake_run_status SET state='FAILED',completed_at=1100",
+                "UPDATE wake_run_status SET state='CANCELLED',cancelled_at=NULL",
+            )
+        (snapshotCorruptions + statusCorruptions).forEachIndexed { index, sql ->
+            if (index > 0) resetCanonicalContext()
+            insertDispatch(state = "RECEIVED")
+            database.openHelper.writableDatabase.execSQL("PRAGMA ignore_check_constraints=ON")
+            database.openHelper.writableDatabase.execSQL(sql)
+            val before = allTablesFingerprint()
+
+            val result = store.reduce(event, WakeEventArrival.Primary, 1_100L, 500L)
+
+            assertEquals(WakeEventStoreOutcome.FAIL_CLOSED, result.outcome, sql)
+            assertNull(result.authorization, sql)
+            assertEquals(before, allTablesFingerprint(), sql)
+        }
+    }
+
+    private fun daoCompareAndSet(
+        expected: WakeEventDispatchEntity,
+        next: WakeEventDispatchEntity,
+    ): Int =
+        database
+            .wakeEventDispatchDao()
+            .compareAndSet(
+                expectedEventKey = expected.eventKey,
+                expectedSnapshotId = expected.snapshotId,
+                expectedEventKind = expected.eventKind,
+                expectedTriggerEpochMs = expected.expectedTriggerEpochMs,
+                expectedState = expected.state,
+                expectedDispatchAttemptId = expected.dispatchAttemptId,
+                expectedLeaseOwner = expected.leaseOwner,
+                expectedLeaseExpiresAt = expected.leaseExpiresAt,
+                expectedAttemptCount = expected.attemptCount,
+                expectedLastAttemptAt = expected.lastAttemptAt,
+                expectedFailureReason = expected.failureReason,
+                expectedArmedPrimary = expected.armedPrimary,
+                expectedRecoverySlotAAt = expected.recoverySlotAAt,
+                expectedRecoverySlotAState = expected.recoverySlotAState,
+                expectedRecoverySlotAToken = expected.recoverySlotAToken,
+                expectedRecoverySlotBAt = expected.recoverySlotBAt,
+                expectedRecoverySlotBState = expected.recoverySlotBState,
+                expectedRecoverySlotBToken = expected.recoverySlotBToken,
+                nextState = next.state,
+                nextDispatchAttemptId = next.dispatchAttemptId,
+                nextLeaseOwner = next.leaseOwner,
+                nextLeaseExpiresAt = next.leaseExpiresAt,
+                nextAttemptCount = next.attemptCount,
+                nextLastAttemptAt = next.lastAttemptAt,
+                nextFailureReason = next.failureReason,
+                nextArmedPrimary = next.armedPrimary,
+                nextRecoverySlotAAt = next.recoverySlotAAt,
+                nextRecoverySlotAState = next.recoverySlotAState,
+                nextRecoverySlotAToken = next.recoverySlotAToken,
+                nextRecoverySlotBAt = next.recoverySlotBAt,
+                nextRecoverySlotBState = next.recoverySlotBState,
+                nextRecoverySlotBToken = next.recoverySlotBToken,
+            )
+
     /** Test fixture deliberately exercises the same authenticated factory Task 5 must use. */
+    private fun assertAuthorizationEquals(
+        expected: WakeDispatchAuthorization,
+        actual: WakeDispatchAuthorization,
+        message: String,
+    ) {
+        assertEquals(expected.event, actual.event, message)
+        assertEquals(expected.eventKey, actual.eventKey, message)
+        assertEquals(expected.scheduleGeneration, actual.scheduleGeneration, message)
+        assertEquals(expected.dispatchAttemptId, actual.dispatchAttemptId, message)
+        assertEquals(expected.expectedExecutionEpoch, actual.expectedExecutionEpoch, message)
+        assertEquals(expected.leaseOwner, actual.leaseOwner, message)
+        assertEquals(expected.leaseExpiresAt, actual.leaseExpiresAt, message)
+        assertEquals(expected.requestedAt, actual.requestedAt, message)
+        assertEquals(expected.source, actual.source, message)
+    }
+
     private fun recoveryArrival(
         slot: WakeRecoverySlotId,
         deliveredToken: Long,
@@ -1104,6 +1835,66 @@ class RoomWakeEventDispatchStoreTest {
             token = deliveredToken,
             triggerEpochMillis = deliveredTriggerEpochMillis,
         )
+
+    /** Test-only bridge: raw arrivals are canonicalized before crossing the production boundary. */
+    private fun RoomWakeEventDispatchStore.reduce(
+        event: WakeEventIdentity,
+        arrival: WakeEventArrival,
+        nowEpochMillis: Long,
+        maxHeartbeatAgeMillis: Long,
+    ): WakeEventStoreResult {
+        val source =
+            arrival.match(
+                onPrimary = {
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        event,
+                        if (event.kind == WakeEventKind.START) {
+                            WakeDispatchSourceKind.START_PRIMARY
+                        } else {
+                            WakeDispatchSourceKind.GOAL_PRIMARY
+                        },
+                        WakePendingIntentData.primary(event),
+                        nowEpochMillis,
+                    )
+                },
+                onRecovery = { deliveredEvent, slot, token, trigger ->
+                    val kind =
+                        when (deliveredEvent.kind to slot) {
+                            WakeEventKind.START to WakeRecoverySlotId.A ->
+                                WakeDispatchSourceKind.START_DYNAMIC_A
+                            WakeEventKind.START to WakeRecoverySlotId.B ->
+                                WakeDispatchSourceKind.START_DYNAMIC_B
+                            WakeEventKind.GOAL to WakeRecoverySlotId.A ->
+                                WakeDispatchSourceKind.GOAL_DYNAMIC_A
+                            WakeEventKind.GOAL to WakeRecoverySlotId.B ->
+                                WakeDispatchSourceKind.GOAL_DYNAMIC_B
+                            else -> error("Unknown test dynamic source")
+                        }
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        deliveredEvent,
+                        kind,
+                        WakePendingIntentData.dynamic(deliveredEvent, slot, token, trigger),
+                        nowEpochMillis,
+                    )
+                },
+            )
+        val exact = reduce(event, source, nowEpochMillis, maxHeartbeatAgeMillis)
+        return when (exact.outcome) {
+            WakeEventStoreOutcome.AUTHORIZED_NEW ->
+                WakeEventStoreResultFactory.create(
+                    WakeEventStoreOutcome.APPLIED,
+                    exact.dispatch,
+                    null,
+                    null,
+                )
+            else -> exact
+        }
+    }
+
+    private fun resetCanonicalContext() {
+        database.openHelper.writableDatabase.execSQL("DELETE FROM wake_run_snapshot")
+        database.wakeRunStorageDao().createSnapshot(snapshot(event.snapshotId), 900L)
+    }
 
     private fun dispatchFingerprint(): List<String?> =
         database.openHelper.readableDatabase
@@ -1167,6 +1958,7 @@ class RoomWakeEventDispatchStoreTest {
         slotBAt: Long? = null,
         slotBState: String = "CONSUMED",
         slotBToken: Long = 0L,
+        eventIdentity: WakeEventIdentity = event,
     ) {
         database.openHelper.writableDatabase.execSQL(
             """
@@ -1180,10 +1972,10 @@ class RoomWakeEventDispatchStoreTest {
             """
                 .trimIndent(),
             arrayOf<Any?>(
-                event.canonicalKey(),
-                event.snapshotId,
-                event.kind.name,
-                event.expectedTriggerEpochMillis,
+                eventIdentity.canonicalKey(),
+                eventIdentity.snapshotId,
+                eventIdentity.kind.name,
+                eventIdentity.expectedTriggerEpochMillis,
                 state,
                 dispatchAttemptId,
                 leaseOwner,

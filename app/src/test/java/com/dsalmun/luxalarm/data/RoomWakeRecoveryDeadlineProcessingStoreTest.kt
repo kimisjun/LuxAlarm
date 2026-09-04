@@ -7,8 +7,11 @@ package com.dsalmun.luxalarm.data
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSourceKind
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakePendingIntentData
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorDelivery
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
 import java.util.UUID
@@ -93,6 +96,7 @@ class RoomWakeRecoveryDeadlineProcessingStoreTest {
             val result = store.processDeadline(delivery())
 
             assertEquals(expectedOutcome, result.outcome, owner)
+            assertNull(result.authorization, owner)
             val after = wholeDatabaseFingerprint()
             if (owner == "WAKE") {
                 assertTrue(before != after, owner)
@@ -559,6 +563,23 @@ class RoomWakeRecoveryDeadlineProcessingStoreTest {
             )
             assertEquals(before, wholeDatabaseFingerprint(), "$status/$currentAnchorState")
         }
+    }
+
+    @Test
+    fun nonemptyMalformedZoneAndDateFailClosedWithoutDeadlineWrites() {
+        listOf(
+                "UPDATE wake_run_snapshot SET zone_id='BOGUS/ZONE'",
+                "UPDATE wake_run_snapshot SET occurrence_local_date='not-a-date'",
+            )
+            .forEachIndexed { index, sql ->
+                if (index > 0) resetDeadlineScenario()
+                database.openHelper.writableDatabase.execSQL(sql)
+                val before = wholeDatabaseFingerprint()
+                val result = store.processDeadline(delivery())
+                assertEquals(WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED, result.outcome)
+                assertNull(result.authorization)
+                assertEquals(before, wholeDatabaseFingerprint())
+            }
     }
 
     @Test
@@ -1411,6 +1432,25 @@ class RoomWakeRecoveryDeadlineProcessingStoreTest {
 
     @Test
     fun predeadlineProcessorAfterDeadlineCannotCreateAttemptOrChangeTerminalPoststate() {
+        val plus15Identity =
+            WakePendingIntentData.anchor(goal, WakeRecoveryAnchorKind.GOAL_PLUS_15M)
+        WakeRecoveryAnchorKind.entries.forEach { kind ->
+            val identity =
+                if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) {
+                    WakePendingIntentData.primary(goal)
+                } else if (kind == WakeRecoveryAnchorKind.GOAL_PLUS_30M) {
+                    "anchor-GOAL_PLUS_30M-pi"
+                } else {
+                    WakePendingIntentData.anchor(goal, kind)
+                }
+            database.openHelper.writableDatabase.execSQL(
+                "UPDATE wake_recovery_anchor SET pending_intent_identity = ? WHERE event_key = ? AND anchor_kind = ?",
+                arrayOf(identity, goal.canonicalKey(), kind.name),
+            )
+        }
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE migration_state SET active_generation = 9 WHERE id = 1"
+        )
         assertEquals(
             WakeRecoveryAnchorProcessingOutcome.TERMINALIZED_NO_CONFIRMATION,
             store.processDeadline(delivery()).outcome,
@@ -1423,11 +1463,16 @@ class RoomWakeRecoveryDeadlineProcessingStoreTest {
                     goal,
                     WakeRecoveryAnchorKind.GOAL_PLUS_15M,
                     902_000L,
-                    "anchor-GOAL_PLUS_15M-pi",
+                    plus15Identity,
                     902_000L,
                 ),
-                proposedDispatchLeaseOwner = "late-predeadline-worker",
-                proposedDispatchLeaseExpiresAtEpochMillis = deadline + 10_000L,
+                source =
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        goal,
+                        WakeDispatchSourceKind.GOAL_PLUS_15M,
+                        plus15Identity,
+                        902_000L,
+                    ),
                 maxHeartbeatAgeMillis = 500L,
             )
 

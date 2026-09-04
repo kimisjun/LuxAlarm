@@ -7,9 +7,12 @@ package com.dsalmun.luxalarm.data
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.dsalmun.luxalarm.wake.MAX_WAKE_OWNER_TOKEN_UTF8_BYTES
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSource
+import com.dsalmun.luxalarm.wake.WakeDispatchSourceKind
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakePendingIntentData
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorDelivery
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
 import java.lang.reflect.Modifier
@@ -46,7 +49,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
         store = RoomWakeRecoveryAnchorProcessingStore(database)
         database.openHelper.writableDatabase.execSQL(
-            "UPDATE migration_state SET schedule_owner = 'WAKE' WHERE id = 1"
+            "UPDATE migration_state SET schedule_owner = 'WAKE', active_generation = 1 WHERE id = 1"
         )
         database.wakeRunStorageDao().createSnapshot(snapshot(), 900L)
         insertDispatch()
@@ -61,27 +64,22 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
 
     @Test
     fun firedPrimaryUnderWakeClaimsNewLeasedDispatchAndConsumesAnchor() {
-        val result =
-            store.processFired(
-                delivery(),
-                proposedDispatchLeaseOwner = "anchor-worker-1",
-                proposedDispatchLeaseExpiresAtEpochMillis = 5_000L,
-                maxHeartbeatAgeMillis = 500L,
-            )
+        val result = process()
 
         assertEquals(WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST, result.outcome)
         assertEquals(goal.canonicalKey(), result.dispatchRequest?.eventKey)
         assertEquals(8L, result.dispatchRequest?.dispatchAttemptId)
-        assertEquals("anchor-worker-1", result.dispatchRequest?.leaseOwner)
-        assertEquals(5_000L, result.dispatchRequest?.leaseExpiresAtEpochMillis)
+        val authorization = requireNotNull(result.authorization)
+        assertEquals(authorization.leaseOwner, result.dispatchRequest?.leaseOwner)
+        assertEquals(62_100L, result.dispatchRequest?.leaseExpiresAtEpochMillis)
         val dispatch =
             requireNotNull(database.wakeRecoveryAnchorDao().dispatch(goal.canonicalKey()))
         assertEquals("DISPATCH_REQUESTED", dispatch.state)
         assertEquals(8L, dispatch.dispatchAttemptId)
         assertEquals(12L, dispatch.attemptCount)
         assertEquals(2_100L, dispatch.lastAttemptAt)
-        assertEquals("anchor-worker-1", dispatch.leaseOwner)
-        assertEquals(5_000L, dispatch.leaseExpiresAt)
+        assertEquals(authorization.leaseOwner, dispatch.leaseOwner)
+        assertEquals(62_100L, dispatch.leaseExpiresAt)
         assertEquals(null, dispatch.failureReason)
         assertEquals(0, dispatch.armedPrimary)
         assertEquals(
@@ -94,49 +92,74 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
     }
 
     @Test
-    fun allFiveKindsProcessAtTheirExactPredeadlineBoundary() {
+    fun allDispatchingAnchorKindsAuthorizeAtTheirExactBoundary() {
         resetDispatchAndAnchor()
-        WakeRecoveryAnchorKind.entries.forEachIndexed { index, kind ->
+        WakeRecoveryAnchorKind.entries.dropLast(1).forEachIndexed { index, kind ->
             if (index > 0) resetDispatchAndAnchor()
             val trigger = requireNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis))
-            val pi = "anchor-kind-$index-pi"
+            val pi =
+                if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) {
+                    WakePendingIntentData.primary(goal)
+                } else {
+                    WakePendingIntentData.anchor(goal, kind)
+                }
             insertDispatch(armedPrimary = 1)
             insertFiredAnchor(kind, trigger, pi)
             val dispatchBefore = dispatchFingerprint()
 
-            val result =
-                process(
-                    delivery(kind, trigger, pi, trigger),
-                    proposedExpiry = trigger + 1_000L,
-                )
+            val result = process(delivery(kind, trigger, pi, trigger))
 
-            if (kind == WakeRecoveryAnchorKind.GOAL_PLUS_30M) {
-                assertEquals(
-                    WakeRecoveryAnchorProcessingOutcome.OUT_OF_SCOPE_DEADLINE,
-                    result.outcome,
-                    kind.name,
+            assertEquals(
+                WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST,
+                result.outcome,
+                kind.name,
+            )
+            val authorization = requireNotNull(result.authorization)
+            val source = sourceFor(delivery(kind, trigger, pi, trigger))
+            val expectedAuthorization =
+                WakeDispatchAuthorizationFactory.create(
+                    goal,
+                    scheduleGeneration = 1L,
+                    dispatchAttemptId = 8L,
+                    expectedExecutionEpoch = 3L,
+                    leaseExpiresAt = trigger + 60_000L,
+                    source = source,
                 )
-                assertEquals(
-                    WakeRecoveryAnchorProcessingRecommendation.DEFER_TO_TERMINAL,
-                    result.recommendation,
-                )
-                assertEquals(dispatchBefore, dispatchFingerprint())
-                assertEquals("FIRED", anchorState(kind))
-            } else {
-                assertEquals(
-                    WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST,
-                    result.outcome,
-                    kind.name,
-                )
-                val dispatch =
-                    requireNotNull(database.wakeRecoveryAnchorDao().dispatch(goal.canonicalKey()))
-                assertEquals(
-                    if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) 0 else 1,
-                    dispatch.armedPrimary,
-                    kind.name,
-                )
-                assertEquals("CONSUMED", anchorState(kind), kind.name)
-            }
+            val dispatch =
+                requireNotNull(database.wakeRecoveryAnchorDao().dispatch(goal.canonicalKey()))
+            assertEquals(expectedAuthorization.event, authorization.event, kind.name)
+            assertEquals(expectedAuthorization.eventKey, authorization.eventKey, kind.name)
+            assertEquals(
+                expectedAuthorization.scheduleGeneration,
+                authorization.scheduleGeneration,
+                kind.name,
+            )
+            assertEquals(
+                expectedAuthorization.dispatchAttemptId,
+                authorization.dispatchAttemptId,
+                kind.name,
+            )
+            assertEquals(
+                expectedAuthorization.expectedExecutionEpoch,
+                authorization.expectedExecutionEpoch,
+                kind.name,
+            )
+            assertEquals(expectedAuthorization.leaseOwner, authorization.leaseOwner, kind.name)
+            assertEquals(
+                expectedAuthorization.leaseExpiresAt,
+                authorization.leaseExpiresAt,
+                kind.name,
+            )
+            assertEquals(expectedAuthorization.requestedAt, authorization.requestedAt, kind.name)
+            assertEquals(expectedAuthorization.source, authorization.source, kind.name)
+            assertEquals(dispatch.leaseOwner, authorization.leaseOwner, kind.name)
+            assertEquals(trigger + 60_000L, authorization.leaseExpiresAt, kind.name)
+            assertEquals(
+                if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) 0 else 1,
+                dispatch.armedPrimary,
+                kind.name,
+            )
+            assertEquals("CONSUMED", anchorState(kind), kind.name)
         }
     }
 
@@ -196,16 +219,17 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             )
             insertFiredAnchor()
 
+            val result = process()
             assertEquals(
                 WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST,
-                process().outcome,
+                result.outcome,
                 "owner=$owner expiry=$expiry",
             )
             val dispatch =
                 requireNotNull(database.wakeRecoveryAnchorDao().dispatch(goal.canonicalKey()))
             assertEquals(8L, dispatch.dispatchAttemptId)
             assertEquals(12L, dispatch.attemptCount)
-            assertEquals("anchor-worker-1", dispatch.leaseOwner)
+            assertEquals(requireNotNull(result.authorization).leaseOwner, dispatch.leaseOwner)
             assertEquals("CONSUMED", anchorState())
         }
     }
@@ -352,11 +376,30 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
         setTerminalStatus("COMPLETED")
         val before = allFingerprint()
 
+        val result = process()
+
+        assertEquals(WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED, result.outcome)
+        assertNull(result.dispatchRequest)
+        assertEquals(WakeRecoveryAnchorProcessingRecommendation.NONE, result.recommendation)
+        assertEquals(before, allFingerprint())
+    }
+
+    @Test
+    fun terminalMalformedSourceDeliveryPairFailsClosedBeforePrimaryCorruptionClassification() {
+        database.openHelper.writableDatabase.execSQL(
+            """UPDATE wake_event_dispatch SET state='DISPATCH_REQUESTED',lease_owner='existing-owner',lease_expires_at=4000,armed_primary=1"""
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE wake_recovery_anchor SET state='CONSUMED'"
+        )
+        setTerminalStatus("COMPLETED")
+        val before = allFingerprint()
+
+        val wrongDelivery = delivery(pi = "wrong-primary-pi")
         val result =
             store.processFired(
-                delivery(),
-                proposedDispatchLeaseOwner = "anchor-worker-1",
-                proposedDispatchLeaseExpiresAtEpochMillis = 5_000L,
+                wrongDelivery,
+                sourceFor(delivery()),
                 maxHeartbeatAgeMillis = 500L,
             )
 
@@ -367,28 +410,34 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
     }
 
     @Test
-    fun terminalWrongDeliveryIdentityIsStaleBeforePrimaryCorruptionClassification() {
-        database.openHelper.writableDatabase.execSQL(
-            """UPDATE wake_event_dispatch SET state='DISPATCH_REQUESTED',lease_owner='existing-owner',lease_expires_at=4000,armed_primary=1"""
-        )
-        database.openHelper.writableDatabase.execSQL(
-            "UPDATE wake_recovery_anchor SET state='CONSUMED'"
-        )
-        setTerminalStatus("COMPLETED")
-        val before = allFingerprint()
-
-        val result =
-            store.processFired(
-                delivery(pi = "wrong-primary-pi"),
-                proposedDispatchLeaseOwner = "anchor-worker-1",
-                proposedDispatchLeaseExpiresAtEpochMillis = 5_000L,
-                maxHeartbeatAgeMillis = 500L,
+    fun malformedGoalPrimarySourcesFailClosedBeforeAnyDatabaseMutation() {
+        val candidate = delivery()
+        val malformedSources =
+            listOf(
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_PLUS_1M,
+                    candidate.pendingIntentIdentity,
+                    candidate.receivedAtEpochMillis,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_PRIMARY,
+                    candidate.pendingIntentIdentity,
+                    candidate.receivedAtEpochMillis + 1L,
+                ),
+                WakeDispatchSource(
+                    WakeDispatchSourceKind.GOAL_PRIMARY,
+                    WakePendingIntentData.anchor(goal, WakeRecoveryAnchorKind.GOAL_PLUS_1M),
+                    candidate.receivedAtEpochMillis,
+                ),
             )
-
-        assertEquals(WakeRecoveryAnchorProcessingOutcome.STALE_DELIVERY, result.outcome)
-        assertNull(result.dispatchRequest)
-        assertEquals(WakeRecoveryAnchorProcessingRecommendation.NONE, result.recommendation)
-        assertEquals(before, allFingerprint())
+        malformedSources.forEach { source ->
+            val before = allFingerprint()
+            val result = store.processFired(candidate, source, 500L)
+            assertEquals(WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED, result.outcome)
+            assertNull(result.authorization)
+            assertNull(result.dispatchRequest)
+            assertEquals(before, allFingerprint())
+        }
     }
 
     @Test
@@ -435,21 +484,18 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
 
         resetDispatchAndAnchor()
         insertDispatch(armedPrimary = 0)
-        insertFiredAnchor(
-            WakeRecoveryAnchorKind.GOAL_PLUS_1M,
-            62_000L,
-            "plus-one-pi",
-        )
+        val plusOneIdentity =
+            WakePendingIntentData.anchor(goal, WakeRecoveryAnchorKind.GOAL_PLUS_1M)
+        insertFiredAnchor(WakeRecoveryAnchorKind.GOAL_PLUS_1M, 62_000L, plusOneIdentity)
         assertEquals(
             WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST,
             process(
                     delivery(
                         WakeRecoveryAnchorKind.GOAL_PLUS_1M,
                         62_000L,
-                        "plus-one-pi",
+                        plusOneIdentity,
                         62_000L,
-                    ),
-                    proposedExpiry = 63_000L,
+                    )
                 )
                 .outcome,
         )
@@ -476,11 +522,6 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
     fun argumentsAreValidatedBeforeAnyDatabaseWrite() {
         val invalidCalls: List<() -> Unit> =
             listOf(
-                { process(proposedOwner = "") },
-                { process(proposedOwner = "bad\nowner") },
-                { process(proposedOwner = "é".repeat(MAX_WAKE_OWNER_TOKEN_UTF8_BYTES)) },
-                { process(proposedExpiry = 2_100L) },
-                { process(proposedExpiry = 2_000L) },
                 { process(maxHeartbeatAgeMillis = 0L) },
                 { process(maxHeartbeatAgeMillis = Long.MIN_VALUE) },
             )
@@ -538,7 +579,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                 result.outcome,
                 evidence.toString(),
             )
-            assertEquals("anchor-worker-1", dispatchRow().leaseOwner)
+            assertEquals(requireNotNull(result.authorization).leaseOwner, dispatchRow().leaseOwner)
             assertEquals("CONSUMED", anchorState())
         }
     }
@@ -600,7 +641,9 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             leaseExpiresAt = 63_000L,
             armedPrimary = 1,
         )
-        insertFiredAnchor(WakeRecoveryAnchorKind.GOAL_PLUS_1M, 62_000L, "plus-one-pi")
+        val plusOneIdentity =
+            WakePendingIntentData.anchor(goal, WakeRecoveryAnchorKind.GOAL_PLUS_1M)
+        insertFiredAnchor(WakeRecoveryAnchorKind.GOAL_PLUS_1M, 62_000L, plusOneIdentity)
         database.openHelper.writableDatabase.execSQL(
             "UPDATE wake_recovery_anchor SET state='CONSUMED'"
         )
@@ -612,10 +655,9 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                     delivery(
                         WakeRecoveryAnchorKind.GOAL_PLUS_1M,
                         62_000L,
-                        "plus-one-pi",
+                        plusOneIdentity,
                         62_000L,
-                    ),
-                    proposedExpiry = 63_000L,
+                    )
                 )
                 .outcome,
         )
@@ -646,6 +688,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                         """UPDATE wake_event_dispatch SET state='DISPATCH_REQUESTED',lease_owner='existing-owner',lease_expires_at=4000,armed_primary=1"""
                     )
                 },
+                FaultCase("BEFORE_RETURN") {},
             )
         cases.forEachIndexed { index, case ->
             if (index > 0) {
@@ -670,7 +713,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
 
             val failure =
                 assertFailsWith<InjectedProcessingFault> {
-                    faultStore.processFired(delivery(), "anchor-worker-1", 5_000L, 500L)
+                    faultStore.processFired(delivery(), sourceFor(delivery()), 500L)
                 }
 
             assertEquals(case.point, failure.message)
@@ -680,19 +723,46 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
     }
 
     @Test
-    fun resultShapeRejectsImpossibleOutcomePayloads() {
+    fun resultShapeIsOpaqueAndFactoryRejectsImpossibleOutcomePayloads() {
+        assertTrue(WakeRecoveryAnchorProcessingResult::class.java.isInterface)
+        assertTrue(WakeRecoveryAnchorProcessingResult::class.java.declaredConstructors.isEmpty())
+        assertTrue(
+            WakeRecoveryAnchorProcessingResult::class.java.declaredMethods.none {
+                it.name == "copy" || it.name == "copy\$default" || it.isSynthetic || it.isBridge
+            }
+        )
+        val authorization =
+            WakeDispatchAuthorizationFactory.create(goal, 1L, 1L, 3L, 3_000L, sourceFor(delivery()))
         WakeRecoveryAnchorProcessingOutcome.entries.forEach { outcome ->
             val request =
-                WakeRecoveryAnchorDispatchRequest(goal.canonicalKey(), 1L, "owner", 3_000L)
+                WakeRecoveryAnchorDispatchRequest(
+                    authorization.eventKey,
+                    authorization.dispatchAttemptId,
+                    authorization.leaseOwner,
+                    authorization.leaseExpiresAt,
+                )
             if (outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST) {
-                WakeRecoveryAnchorProcessingResult(outcome, request)
+                WakeRecoveryAnchorProcessingResultFactory.create(outcome, request, authorization)
                 assertFailsWith<IllegalArgumentException> {
-                    WakeRecoveryAnchorProcessingResult(outcome, null)
+                    WakeRecoveryAnchorProcessingResultFactory.create(outcome, null, authorization)
+                }
+                assertFailsWith<IllegalArgumentException> {
+                    WakeRecoveryAnchorProcessingResultFactory.create(outcome, request, null)
+                }
+                assertFailsWith<IllegalArgumentException> {
+                    WakeRecoveryAnchorProcessingResultFactory.create(
+                        outcome,
+                        request.copy(dispatchAttemptId = request.dispatchAttemptId + 1L),
+                        authorization,
+                    )
                 }
             } else {
-                WakeRecoveryAnchorProcessingResult(outcome, null)
+                WakeRecoveryAnchorProcessingResultFactory.create(outcome, null, null)
                 assertFailsWith<IllegalArgumentException> {
-                    WakeRecoveryAnchorProcessingResult(outcome, request)
+                    WakeRecoveryAnchorProcessingResultFactory.create(outcome, request, null)
+                }
+                assertFailsWith<IllegalArgumentException> {
+                    WakeRecoveryAnchorProcessingResultFactory.create(outcome, null, authorization)
                 }
             }
             val expectedRecommendation =
@@ -703,10 +773,15 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                 }
             assertEquals(
                 expectedRecommendation,
-                WakeRecoveryAnchorProcessingResult(
+                WakeRecoveryAnchorProcessingResultFactory.create(
                         outcome,
                         if (outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST) {
                             request
+                        } else {
+                            null
+                        },
+                        if (outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST) {
+                            authorization
                         } else {
                             null
                         },
@@ -714,16 +789,22 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                     .recommendation,
             )
         }
+        WakeRecoveryAnchorProcessingResultFactory::class.java.declaredMethods.forEach { method ->
+            assertTrue(!method.name.contains("default"), method.toString())
+            assertTrue(!method.isBridge, method.toString())
+        }
     }
 
     @Test
     fun wrongDeliveryIdentityAndNonFiredStatesAreStaleWithoutWrites() {
-        val candidates =
-            listOf(
-                delivery(pi = "wrong-pi"),
-                delivery(trigger = 2_001L),
-                delivery(receivedAt = 1_999L),
-            )
+        val malformedIdentity = delivery(pi = "wrong-pi")
+        val malformedBefore = allFingerprint()
+        assertEquals(
+            WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED,
+            process(malformedIdentity).outcome,
+        )
+        assertEquals(malformedBefore, allFingerprint())
+        val candidates = listOf(delivery(trigger = 2_001L), delivery(receivedAt = 1_999L))
         candidates.forEach { candidate ->
             val before = allFingerprint()
             assertEquals(
@@ -758,6 +839,8 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                 "UPDATE wake_event_dispatch SET recovery_slot_b_token=-1",
                 "UPDATE wake_run_snapshot SET goal_epoch_ms=2001",
                 "UPDATE wake_run_snapshot SET schedule_generation=-1",
+                "UPDATE wake_run_snapshot SET zone_id='BOGUS/ZONE'",
+                "UPDATE wake_run_snapshot SET occurrence_local_date='not-a-date'",
                 "UPDATE wake_run_status SET state='BOGUS'",
                 "UPDATE wake_run_status SET execution_epoch=-1",
                 "UPDATE migration_state SET schedule_owner='BOGUS' WHERE id=1",
@@ -772,11 +855,13 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
             database.openHelper.writableDatabase.execSQL("PRAGMA ignore_check_constraints=ON")
             database.openHelper.writableDatabase.execSQL(sql)
             val before = allFingerprint()
+            val result = process()
             assertEquals(
                 WakeRecoveryAnchorProcessingOutcome.FAIL_CLOSED,
-                process().outcome,
+                result.outcome,
                 sql,
             )
+            assertNull(result.authorization, sql)
             assertEquals(before, allFingerprint(), sql)
         }
 
@@ -933,25 +1018,40 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
                         Callable {
                             start.await()
                             RoomWakeRecoveryAnchorProcessingStore(database)
-                                .processFired(delivery(), "worker-$index", 5_000L, 500L)
-                                .outcome
+                                .processFired(delivery(), sourceFor(delivery()), 500L)
                         }
                     )
                 }
             start.countDown()
-            val outcomes = calls.map { it.get(10, TimeUnit.SECONDS) }
-            assertEquals(
-                1,
-                outcomes.count {
-                    it == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST
-                },
-            )
-            assertEquals(
-                1,
-                outcomes.count {
-                    it == WakeRecoveryAnchorProcessingOutcome.EXISTING_DURABLE_REQUEST
-                },
-            )
+            val results = calls.map { it.get(10, TimeUnit.SECONDS) }
+            val winner = results.single {
+                it.outcome == WakeRecoveryAnchorProcessingOutcome.NEW_DISPATCH_REQUEST
+            }
+            val loser = results.single {
+                it.outcome == WakeRecoveryAnchorProcessingOutcome.EXISTING_DURABLE_REQUEST
+            }
+            val expected =
+                WakeDispatchAuthorizationFactory.create(
+                    goal,
+                    1L,
+                    8L,
+                    0L,
+                    62_100L,
+                    sourceFor(delivery()),
+                )
+            val authorization = requireNotNull(winner.authorization)
+            assertEquals(expected.event, authorization.event)
+            assertEquals(expected.eventKey, authorization.eventKey)
+            assertEquals(expected.scheduleGeneration, authorization.scheduleGeneration)
+            assertEquals(expected.dispatchAttemptId, authorization.dispatchAttemptId)
+            assertEquals(expected.expectedExecutionEpoch, authorization.expectedExecutionEpoch)
+            assertEquals(expected.leaseOwner, authorization.leaseOwner)
+            assertEquals(expected.leaseExpiresAt, authorization.leaseExpiresAt)
+            assertEquals(expected.requestedAt, authorization.requestedAt)
+            assertEquals(expected.source, authorization.source)
+            assertNull(loser.authorization)
+            assertNull(loser.dispatchRequest)
+            assertEquals(1, results.count { it.authorization != null })
             assertEquals(8L, dispatchRow().dispatchAttemptId)
             assertEquals(12L, dispatchRow().attemptCount)
             assertEquals("CONSUMED", anchorState())
@@ -976,8 +1076,7 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
         assertEquals(
             listOf(
                 WakeRecoveryAnchorDelivery::class.java,
-                String::class.java,
-                Long::class.javaPrimitiveType,
+                WakeDispatchSource::class.java,
                 Long::class.javaPrimitiveType,
             ),
             entry.parameterTypes.toList(),
@@ -1014,119 +1113,15 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
         )
     }
 
-    @Test
-    fun completeProcessingStoreJvmSurfaceIsExactlyLocked() {
-        val type = RoomWakeRecoveryAnchorProcessingStore::class.java
-        assertEquals(
-            listOf(
-                "constructor(Lcom/dsalmun/luxalarm/data/AlarmDatabase;)V|public|synthetic=false",
-                "constructor(Lcom/dsalmun/luxalarm/data/AlarmDatabase;Lkotlin/jvm/functions/Function1;)V|private|synthetic=false",
-            ),
-            type.declaredConstructors.map(::constructorSurface).sorted(),
-        )
-        val expectedMethods =
-            expectedSurface(
-                """
-                _init_#lambda#0(Ljava/lang/String;)Lkotlin/Unit;|private static final|synthetic=false|bridge=false
-                cancellationOutbox(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/Long;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
-                casResult(I)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
-                classifyDeadlineCasMiss#lambda#0(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineCasMiss;)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlinePoststate;|private static final|synthetic=false|bridge=false
-                classifyDeadlineCasMiss(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineCasMiss;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
-                createNextOutbox(Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
-                deadlineAnchorPostimages(Ljava/util/List;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorKind;)Ljava/util/List;|private final|synthetic=false|bridge=false
-                deadlineCasMiss(ILcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineExpectedPoststate;)Ljava/lang/Void;|private final|synthetic=false|bridge=false
-                deadlineOutboxRows(Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Ljava/util/List;Ljava/util/List;J)Ljava/util/List;|private final|synthetic=false|bridge=false
-                decide(Lcom/dsalmun/luxalarm/wake/WakeScheduleOwner;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#Decision;|private final|synthetic=false|bridge=false
-                duplicateResult(Lcom/dsalmun/luxalarm/wake/WakeScheduleOwner;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
-                hasActiveDispatchRequest(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;J)Z|private final|synthetic=false|bridge=false
-                hasHealthyServiceAck(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;JJ)Z|private final|synthetic=false|bridge=false
-                matches(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorRow;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Z|private final|synthetic=false|bridge=false
-                pendingOutbox(Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;J)Lcom/dsalmun/luxalarm/data/ScheduleOutboxEntity;|private final|synthetic=false|bridge=false
-                processDeadline#lambda#0(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private static final|synthetic=false|bridge=false
-                processDeadline(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|public final|synthetic=false|bridge=false
-                processFired#lambda#3(Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore;Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;JLjava/lang/String;J)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private static final|synthetic=false|bridge=false
-                processFired(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Ljava/lang/String;JJ)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|public final|synthetic=false|bridge=false
-                requireNonNegative([Ljava/lang/Long;)V|private final transient|synthetic=false|bridge=false
-                result(Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingOutcome;)Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
-                resultFailClosed()Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorProcessingResult;|private final|synthetic=false|bridge=false
-                terminalDispatch(Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;)Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;|private final|synthetic=false|bridge=false
-                terminalSlotState(Ljava/lang/String;)Ljava/lang/String;|private final|synthetic=false|bridge=false
-                toBooleanFlag(I)Z|private final|synthetic=false|bridge=false
-                toPureRow(Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorEntity;Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;)Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorRow;|private final|synthetic=false|bridge=false
-                toPureStatus(Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;)Lcom/dsalmun/luxalarm/wake/WakeRecoveryRunStatus;|private final|synthetic=false|bridge=false
-                validateDeadlineAnchors(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;Ljava/util/List;Z)Ljava/util/List;|private final|synthetic=false|bridge=false
-                validateDeadlineDispatches(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Ljava/util/List;Z)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#DeadlineDispatches;|private final|synthetic=false|bridge=false
-                validateDispatchRow(Lcom/dsalmun/luxalarm/wake/WakeEventIdentity;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Z)Lcom/dsalmun/luxalarm/wake/WakeDispatchState;|private final|synthetic=false|bridge=false
-                validateRows(Lcom/dsalmun/luxalarm/wake/WakeRecoveryAnchorDelivery;Lcom/dsalmun/luxalarm/data/WakeEventDispatchEntity;Lcom/dsalmun/luxalarm/data/WakeRunSnapshotEntity;Lcom/dsalmun/luxalarm/data/WakeRunStatusEntity;Lcom/dsalmun/luxalarm/data/MigrationStateEntity;Lcom/dsalmun/luxalarm/data/WakeRecoveryAnchorEntity;)Lcom/dsalmun/luxalarm/data/RoomWakeRecoveryAnchorProcessingStore#ValidatedContext;|private final|synthetic=false|bridge=false
-                validateSlot(Ljava/lang/String;Ljava/lang/Long;J)V|private final|synthetic=false|bridge=false
-                """
-            )
-        val methods = type.declaredMethods.map(::methodSurface).sorted()
-        val coverageMethods = methods.filter { it.startsWith("$" + "jacocoInit") }
-        assertTrue(
-            coverageMethods.isEmpty() ||
-                coverageMethods ==
-                    listOf(
-                        "$" +
-                            "jacocoInit(Ljava/lang/invoke/MethodHandles$" +
-                            "Lookup;Ljava/lang/String;Ljava/lang/Class;)[Z|private static|" +
-                            "synthetic=true|bridge=false"
-                    )
-        )
-        assertEquals(expectedMethods, methods - coverageMethods.toSet())
-        assertEquals(
-            listOf(
-                "$" + "stable:I|public static final|synthetic=false",
-                "database:Lcom/dsalmun/luxalarm/data/AlarmDatabase;|private final|synthetic=false",
-                "faultHook:Lkotlin/jvm/functions/Function1;|private final|synthetic=false",
-            ),
-            type.declaredFields.map(::fieldSurface).sorted(),
-        )
-    }
-
-    private fun expectedSurface(text: String): List<String> =
-        text.trimIndent().lines().filter(String::isNotBlank).map { it.replace('#', '$') }.sorted()
-
-    private fun constructorSurface(constructor: java.lang.reflect.Constructor<*>): String =
-        "constructor" +
-            constructor.parameterTypes.joinToString(separator = "", prefix = "(", postfix = ")") {
-                jvmDescriptor(it)
-            } +
-            "V|${Modifier.toString(constructor.modifiers)}|synthetic=${constructor.isSynthetic}"
-
-    private fun methodSurface(method: java.lang.reflect.Method): String =
-        method.name +
-            method.parameterTypes.joinToString(separator = "", prefix = "(", postfix = ")") {
-                jvmDescriptor(it)
-            } +
-            jvmDescriptor(method.returnType) +
-            "|${Modifier.toString(method.modifiers)}" +
-            "|synthetic=${method.isSynthetic}|bridge=${method.isBridge}"
-
-    private fun fieldSurface(field: java.lang.reflect.Field): String =
-        "${field.name}:${jvmDescriptor(field.type)}|${Modifier.toString(field.modifiers)}" +
-            "|synthetic=${field.isSynthetic}"
-
-    private fun jvmDescriptor(type: Class<*>): String =
-        when (type) {
-            java.lang.Void.TYPE -> "V"
-            java.lang.Boolean.TYPE -> "Z"
-            java.lang.Byte.TYPE -> "B"
-            java.lang.Character.TYPE -> "C"
-            java.lang.Short.TYPE -> "S"
-            java.lang.Integer.TYPE -> "I"
-            java.lang.Long.TYPE -> "J"
-            java.lang.Float.TYPE -> "F"
-            java.lang.Double.TYPE -> "D"
-            else ->
-                if (type.isArray) type.name.replace('.', '/')
-                else "L${type.name.replace('.', '/')};"
-        }
-
     private fun delivery(
         kind: WakeRecoveryAnchorKind = WakeRecoveryAnchorKind.GOAL_PRIMARY,
         trigger: Long = requireNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis)),
-        pi: String = "goal-primary-pi",
+        pi: String =
+            if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) {
+                WakePendingIntentData.primary(goal)
+            } else {
+                WakePendingIntentData.anchor(goal, kind)
+            },
         receivedAt: Long = 2_100L,
     ) =
         WakeRecoveryAnchorDelivery(
@@ -1139,16 +1134,36 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
 
     private fun process(
         candidate: WakeRecoveryAnchorDelivery = delivery(),
-        proposedOwner: String = "anchor-worker-1",
-        proposedExpiry: Long = 5_000L,
         maxHeartbeatAgeMillis: Long = 500L,
     ) =
         store.processFired(
             candidate,
-            proposedOwner,
-            proposedExpiry,
+            sourceFor(candidate),
             maxHeartbeatAgeMillis,
         )
+
+    private fun sourceFor(candidate: WakeRecoveryAnchorDelivery): WakeDispatchSource {
+        val kind =
+            when (candidate.kind) {
+                WakeRecoveryAnchorKind.GOAL_PRIMARY -> WakeDispatchSourceKind.GOAL_PRIMARY
+                WakeRecoveryAnchorKind.GOAL_PLUS_1M -> WakeDispatchSourceKind.GOAL_PLUS_1M
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M -> WakeDispatchSourceKind.GOAL_PLUS_5M
+                WakeRecoveryAnchorKind.GOAL_PLUS_15M -> WakeDispatchSourceKind.GOAL_PLUS_15M
+                WakeRecoveryAnchorKind.GOAL_PLUS_30M -> error("Deadline anchors do not dispatch")
+            }
+        val canonicalIdentity =
+            if (candidate.kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) {
+                WakePendingIntentData.primary(candidate.event)
+            } else {
+                WakePendingIntentData.anchor(candidate.event, candidate.kind)
+            }
+        return WakeDispatchAuthorizationFactory.canonicalSource(
+            candidate.event,
+            kind,
+            canonicalIdentity,
+            candidate.receivedAtEpochMillis,
+        )
+    }
 
     private fun snapshot() =
         WakeRunSnapshotEntity(
@@ -1213,7 +1228,12 @@ class RoomWakeRecoveryAnchorProcessingStoreTest {
     private fun insertFiredAnchor(
         kind: WakeRecoveryAnchorKind = WakeRecoveryAnchorKind.GOAL_PRIMARY,
         trigger: Long = requireNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis)),
-        pi: String = "goal-primary-pi",
+        pi: String =
+            if (kind == WakeRecoveryAnchorKind.GOAL_PRIMARY) {
+                WakePendingIntentData.primary(goal)
+            } else {
+                WakePendingIntentData.anchor(goal, kind)
+            },
     ) {
         database.openHelper.writableDatabase.execSQL(
             """INSERT INTO wake_recovery_anchor(event_key,anchor_kind,trigger_epoch_ms,state,pending_intent_identity) VALUES (?,?,?,'FIRED',?)""",

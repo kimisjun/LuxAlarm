@@ -5,8 +5,11 @@
 package com.dsalmun.luxalarm.data
 
 import com.dsalmun.luxalarm.wake.WakeDispatchAction
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorization
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
 import com.dsalmun.luxalarm.wake.WakeDispatchInput
 import com.dsalmun.luxalarm.wake.WakeDispatchReducer
+import com.dsalmun.luxalarm.wake.WakeDispatchSource
 import com.dsalmun.luxalarm.wake.WakeDispatchState
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeRecoverySlot
@@ -65,6 +68,8 @@ internal object AuthenticatedWakeEventArrivalFactory {
 internal enum class WakeEventStoreOutcome {
     APPLIED,
     CONVERGED,
+    AUTHORIZED_NEW,
+    CONVERGED_EXACT_DUPLICATE,
     NO_OP_TERMINAL,
     NO_OP_ACTIVE_DISPATCH,
     NO_OP_HEALTHY_ACK,
@@ -77,11 +82,38 @@ internal enum class WakeEventConvergence {
     ALREADY_CONSUMED
 }
 
-internal data class WakeEventStoreResult(
-    val outcome: WakeEventStoreOutcome,
-    val dispatch: WakeEventDispatchEntity? = null,
-    val convergence: WakeEventConvergence? = null,
-)
+internal interface WakeEventStoreResult {
+    val outcome: WakeEventStoreOutcome
+    val dispatch: WakeEventDispatchEntity?
+    val convergence: WakeEventConvergence?
+    val authorization: WakeDispatchAuthorization?
+}
+
+/** Sole auditable construction path for event-store result payloads. */
+internal object WakeEventStoreResultFactory {
+    fun create(
+        outcome: WakeEventStoreOutcome,
+        dispatch: WakeEventDispatchEntity?,
+        convergence: WakeEventConvergence?,
+        authorization: WakeDispatchAuthorization?,
+    ): WakeEventStoreResult {
+        require((outcome == WakeEventStoreOutcome.AUTHORIZED_NEW) == (authorization != null)) {
+            "Authorization exists exactly for AUTHORIZED_NEW"
+        }
+        require(
+            (outcome == WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE) ==
+                (convergence == WakeEventConvergence.ALREADY_CONSUMED)
+        ) {
+            "Convergence exists exactly for an exact consumed duplicate"
+        }
+        return object : WakeEventStoreResult {
+            override val outcome = outcome
+            override val dispatch = dispatch
+            override val convergence = convergence
+            override val authorization = authorization
+        }
+    }
+}
 
 /**
  * Transactional adapter from durable V6 rows to the pure, slot-based wake-event reducer.
@@ -100,49 +132,63 @@ private constructor(
 
     fun reduce(
         event: WakeEventIdentity,
-        arrival: WakeEventArrival,
+        source: WakeDispatchSource,
         nowEpochMillis: Long,
         maxHeartbeatAgeMillis: Long,
     ): WakeEventStoreResult {
         require(nowEpochMillis >= 0L) { "Current epoch must not be negative" }
         require(maxHeartbeatAgeMillis > 0L) { "Heartbeat age bound must be positive" }
+        if (source.receivedAt != nowEpochMillis) {
+            return result(WakeEventStoreOutcome.FAIL_CLOSED)
+        }
+        val canonicalSource =
+            runCatching {
+                    WakeDispatchAuthorizationFactory.canonicalSource(
+                        event,
+                        source.kind,
+                        source.canonicalPendingIntentIdentity,
+                        source.receivedAt,
+                    )
+                }
+                .getOrNull() ?: return result(WakeEventStoreOutcome.FAIL_CLOSED)
+        if (canonicalSource != source) {
+            return result(WakeEventStoreOutcome.FAIL_CLOSED)
+        }
+        val parsed =
+            com.dsalmun.luxalarm.wake.WakePendingIntentData.parse(
+                source.canonicalPendingIntentIdentity
+            ) ?: return result(WakeEventStoreOutcome.FAIL_CLOSED)
+        val arrival =
+            parsed.match(
+                onPrimary = { parsedEvent, _ ->
+                    if (parsedEvent == event) WakeEventArrival.Primary else null
+                },
+                onDynamic = { parsedEvent, dynamic -> if (parsedEvent == event) dynamic else null },
+                onAnchor = { null },
+            ) ?: return result(WakeEventStoreOutcome.FAIL_CLOSED)
         return database.runInTransaction<WakeEventStoreResult> {
             val dao = database.wakeEventDispatchDao()
             val initial =
                 dao.dispatch(event.canonicalKey())
-                    ?: return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.FAIL_CLOSED
-                    )
+                    ?: return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED)
             val baseContext =
-                loadContext(
-                    dao,
-                    event,
-                    initial,
-                    arrivingSlot = null,
-                    nowEpochMillis,
-                    maxHeartbeatAgeMillis,
-                )
-                    ?: return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.FAIL_CLOSED,
-                        initial,
-                    )
-            when (val gate = authenticateArrival(initial, baseContext, arrival)) {
+                loadContext(dao, event, initial, null, nowEpochMillis, maxHeartbeatAgeMillis)
+                    ?: return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED, initial)
+            val status = checkNotNull(dao.status(event.snapshotId))
+            if (status.state in TERMINAL_STATUS_STATES) {
+                return@runInTransaction result(WakeEventStoreOutcome.NO_OP_TERMINAL, initial)
+            }
+            when (authenticateArrival(initial, baseContext, arrival)) {
                 ArrivalGate.ALREADY_CONSUMED ->
-                    return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.CONVERGED,
+                    return@runInTransaction result(
+                        WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
                         initial,
                         WakeEventConvergence.ALREADY_CONSUMED,
                     )
                 ArrivalGate.STALE_DELIVERY ->
-                    return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.STALE_DELIVERY,
-                        initial,
-                    )
+                    return@runInTransaction result(WakeEventStoreOutcome.STALE_DELIVERY, initial)
                 ArrivalGate.FAIL_CLOSED ->
-                    return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.FAIL_CLOSED,
-                        initial,
-                    )
+                    return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED, initial)
                 ArrivalGate.VALID -> Unit
             }
 
@@ -152,82 +198,144 @@ private constructor(
                     arrivingRecoveryTriggerEpochMillis = arrival.recoveryTriggerOrNull(),
                 )
             val reduction = WakeDispatchReducer.reduce(context)
-            val transition = reduction.transition
-            if (transition == null) {
-                return@runInTransaction WakeEventStoreResult(
-                    reduction.action.toStoreOutcome(),
-                    initial,
-                )
-            }
+            val transition =
+                reduction.transition
+                    ?: return@runInTransaction result(reduction.action.toStoreOutcome(), initial)
+            val requesting = reduction.action == WakeDispatchAction.REQUEST_DISPATCH
             if (
-                reduction.action == WakeDispatchAction.REQUEST_DISPATCH &&
-                    initial.attemptCount == Long.MAX_VALUE
+                requesting &&
+                    (initial.attemptCount == Long.MAX_VALUE ||
+                        nowEpochMillis > Long.MAX_VALUE - DISPATCH_LEASE_MILLIS)
             ) {
-                return@runInTransaction WakeEventStoreResult(
-                    WakeEventStoreOutcome.FAIL_CLOSED,
-                    initial,
-                )
+                return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED, initial)
             }
+            val authorization =
+                if (requesting) {
+                    val snapshot = checkNotNull(dao.snapshot(event.snapshotId))
+                    runCatching {
+                            WakeDispatchAuthorizationFactory.create(
+                                event,
+                                snapshot.scheduleGeneration,
+                                transition.nextDispatchAttemptId,
+                                status.executionEpoch,
+                                nowEpochMillis + DISPATCH_LEASE_MILLIS,
+                                source,
+                            )
+                        }
+                        .getOrNull()
+                        ?: return@runInTransaction result(
+                            WakeEventStoreOutcome.FAIL_CLOSED,
+                            initial,
+                        )
+                } else null
+            val expectedPostimage =
+                initial.copy(
+                    state = transition.nextState.name,
+                    dispatchAttemptId = transition.nextDispatchAttemptId,
+                    leaseOwner = if (requesting) authorization?.leaseOwner else initial.leaseOwner,
+                    leaseExpiresAt =
+                        if (requesting) authorization?.leaseExpiresAt else initial.leaseExpiresAt,
+                    attemptCount =
+                        if (requesting) initial.attemptCount + 1L else initial.attemptCount,
+                    lastAttemptAt = if (requesting) nowEpochMillis else initial.lastAttemptAt,
+                    failureReason = if (requesting) null else initial.failureReason,
+                    armedPrimary = if (arrival.isPrimary()) 0 else initial.armedPrimary,
+                    recoverySlotAAt =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.A) {
+                            transition.nextRecoveryTriggerAtEpochMillis
+                        } else initial.recoverySlotAAt,
+                    recoverySlotAState =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.A) {
+                            checkNotNull(transition.nextRecoverySlotState).name
+                        } else initial.recoverySlotAState,
+                    recoverySlotAToken =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.A) {
+                            checkNotNull(transition.nextRecoverySlotToken)
+                        } else initial.recoverySlotAToken,
+                    recoverySlotBAt =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.B) {
+                            transition.nextRecoveryTriggerAtEpochMillis
+                        } else initial.recoverySlotBAt,
+                    recoverySlotBState =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.B) {
+                            checkNotNull(transition.nextRecoverySlotState).name
+                        } else initial.recoverySlotBState,
+                    recoverySlotBToken =
+                        if (transition.expectedRecoverySlot == WakeRecoverySlotId.B) {
+                            checkNotNull(transition.nextRecoverySlotToken)
+                        } else initial.recoverySlotBToken,
+                )
             faultHook(BEFORE_CAS)
             val changed =
                 dao.compareAndSet(
-                    eventKey = transition.expectedEventKey,
-                    expectedState = transition.expectedState.name,
-                    expectedDispatchAttemptId = transition.expectedDispatchAttemptId,
-                    primaryArrival = arrival.isPrimary(),
-                    arrivingSlot = transition.expectedRecoverySlot?.name,
-                    expectedSlotState = transition.expectedRecoverySlotState?.name,
-                    expectedSlotTrigger = transition.expectedRecoveryTriggerAtEpochMillis,
-                    expectedSlotToken = transition.expectedRecoverySlotToken,
-                    nextState = transition.nextState.name,
-                    nextDispatchAttemptId = transition.nextDispatchAttemptId,
-                    nextSlotState = transition.nextRecoverySlotState?.name,
-                    nextSlotTrigger = transition.nextRecoveryTriggerAtEpochMillis,
-                    nextSlotToken = transition.nextRecoverySlotToken,
-                    requestDispatch = reduction.action == WakeDispatchAction.REQUEST_DISPATCH,
-                    nowEpochMillis = nowEpochMillis,
+                    expectedEventKey = initial.eventKey,
+                    expectedSnapshotId = initial.snapshotId,
+                    expectedEventKind = initial.eventKind,
+                    expectedTriggerEpochMs = initial.expectedTriggerEpochMs,
+                    expectedState = initial.state,
+                    expectedDispatchAttemptId = initial.dispatchAttemptId,
+                    expectedLeaseOwner = initial.leaseOwner,
+                    expectedLeaseExpiresAt = initial.leaseExpiresAt,
+                    expectedAttemptCount = initial.attemptCount,
+                    expectedLastAttemptAt = initial.lastAttemptAt,
+                    expectedFailureReason = initial.failureReason,
+                    expectedArmedPrimary = initial.armedPrimary,
+                    expectedRecoverySlotAAt = initial.recoverySlotAAt,
+                    expectedRecoverySlotAState = initial.recoverySlotAState,
+                    expectedRecoverySlotAToken = initial.recoverySlotAToken,
+                    expectedRecoverySlotBAt = initial.recoverySlotBAt,
+                    expectedRecoverySlotBState = initial.recoverySlotBState,
+                    expectedRecoverySlotBToken = initial.recoverySlotBToken,
+                    nextState = expectedPostimage.state,
+                    nextDispatchAttemptId = expectedPostimage.dispatchAttemptId,
+                    nextLeaseOwner = expectedPostimage.leaseOwner,
+                    nextLeaseExpiresAt = expectedPostimage.leaseExpiresAt,
+                    nextAttemptCount = expectedPostimage.attemptCount,
+                    nextLastAttemptAt = expectedPostimage.lastAttemptAt,
+                    nextFailureReason = expectedPostimage.failureReason,
+                    nextArmedPrimary = expectedPostimage.armedPrimary,
+                    nextRecoverySlotAAt = expectedPostimage.recoverySlotAAt,
+                    nextRecoverySlotAState = expectedPostimage.recoverySlotAState,
+                    nextRecoverySlotAToken = expectedPostimage.recoverySlotAToken,
+                    nextRecoverySlotBAt = expectedPostimage.recoverySlotBAt,
+                    nextRecoverySlotBState = expectedPostimage.recoverySlotBState,
+                    nextRecoverySlotBToken = expectedPostimage.recoverySlotBToken,
                 )
             if (changed == 1) {
                 faultHook(AFTER_CAS)
                 val applied = checkNotNull(dao.dispatch(event.canonicalKey()))
-                return@runInTransaction WakeEventStoreResult(WakeEventStoreOutcome.APPLIED, applied)
+                check(applied == expectedPostimage) { "Room CAS postimage did not match exactly" }
+                if (requesting) {
+                    checkNotNull(authorization)
+                    faultHook(BEFORE_RETURN)
+                    return@runInTransaction result(
+                        WakeEventStoreOutcome.AUTHORIZED_NEW,
+                        applied,
+                        authorization = authorization,
+                    )
+                }
+                faultHook(BEFORE_RETURN)
+                return@runInTransaction result(WakeEventStoreOutcome.APPLIED, applied)
             }
             check(changed == 0) { "Room CAS changed more than one dispatch row" }
 
-            // Room serializes this store's read and write in one transaction, so ordinary store
-            // callers cannot deterministically produce CAS=0 between them. A zero count is handled
-            // with one bounded reread, never a second mutation or inferred full-postimage match.
+            // Exactly one bounded read-only reread; never perform a second mutation on CAS loss.
             val current =
                 dao.dispatch(event.canonicalKey())
-                    ?: return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.FAIL_CLOSED
-                    )
+                    ?: return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED)
             val currentContext =
-                loadContext(
-                    dao,
-                    event,
-                    current,
-                    arrivingSlot = null,
-                    nowEpochMillis,
-                    maxHeartbeatAgeMillis,
-                )
-                    ?: return@runInTransaction WakeEventStoreResult(
-                        WakeEventStoreOutcome.FAIL_CLOSED,
-                        current,
-                    )
+                loadContext(dao, event, current, null, nowEpochMillis, maxHeartbeatAgeMillis)
+                    ?: return@runInTransaction result(WakeEventStoreOutcome.FAIL_CLOSED, current)
             return@runInTransaction when (authenticateArrival(current, currentContext, arrival)) {
-                ArrivalGate.STALE_DELIVERY ->
-                    WakeEventStoreResult(WakeEventStoreOutcome.STALE_DELIVERY, current)
-                ArrivalGate.FAIL_CLOSED ->
-                    WakeEventStoreResult(WakeEventStoreOutcome.FAIL_CLOSED, current)
+                ArrivalGate.STALE_DELIVERY -> result(WakeEventStoreOutcome.STALE_DELIVERY, current)
+                ArrivalGate.FAIL_CLOSED -> result(WakeEventStoreOutcome.FAIL_CLOSED, current)
                 ArrivalGate.ALREADY_CONSUMED ->
-                    WakeEventStoreResult(
-                        WakeEventStoreOutcome.CONVERGED,
+                    result(
+                        WakeEventStoreOutcome.CONVERGED_EXACT_DUPLICATE,
                         current,
                         WakeEventConvergence.ALREADY_CONSUMED,
                     )
-                ArrivalGate.VALID ->
-                    WakeEventStoreResult(WakeEventStoreOutcome.STALE_RETRY_REQUIRED, current)
+                ArrivalGate.VALID -> result(WakeEventStoreOutcome.STALE_RETRY_REQUIRED, current)
             }
         }
     }
@@ -281,67 +389,61 @@ private constructor(
         arrivingSlot: WakeRecoverySlotId?,
         nowEpochMillis: Long,
         maxHeartbeatAgeMillis: Long,
-    ): WakeDispatchInput? =
-        runCatching {
-                check(dispatch.eventKey == event.canonicalKey())
-                check(dispatch.snapshotId == event.snapshotId)
-                check(dispatch.eventKind == event.kind.name)
-                check(dispatch.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
-                check(dispatch.expectedTriggerEpochMs >= 0L)
-                WakeDispatchState.valueOf(dispatch.state)
-                check(dispatch.dispatchAttemptId >= 0L)
-                check(dispatch.attemptCount >= 0L)
-                check(dispatch.armedPrimary in 0..1)
-                checkNonNegative(dispatch.leaseExpiresAt, dispatch.lastAttemptAt)
-                checkLeasePair(dispatch.leaseOwner, dispatch.leaseExpiresAt)
-                val slotA = dispatch.slot(WakeRecoverySlotId.A)
-                val slotB = dispatch.slot(WakeRecoverySlotId.B)
-                val migration = checkNotNull(dao.migrationState())
-                check(migration.id == 1)
-                val status = checkNotNull(dao.status(event.snapshotId))
-                check(status.snapshotId == event.snapshotId)
-                check(status.state in WAKE_STATUS_STATES)
-                check(status.executionEpoch >= 0L)
-                check(status.armedStart in 0..1 && status.armedGoal in 0..1)
-                checkNonNegative(
-                    status.processedStartAt,
-                    status.processedGoalAt,
-                    status.serviceLeaseExpiresAt,
-                    status.heartbeatAt,
-                    status.startedAt,
-                    status.completedAt,
-                    status.cancelledAt,
-                )
-                checkLeasePair(status.serviceLeaseOwner, status.serviceLeaseExpiresAt)
-                WakeDispatchInput(
-                    event = event,
-                    state = WakeDispatchState.valueOf(dispatch.state),
-                    scheduleOwner = WakeScheduleOwner.valueOf(migration.scheduleOwner),
-                    dispatchAttemptId = dispatch.dispatchAttemptId,
-                    dispatchLeaseOwner = dispatch.leaseOwner,
-                    dispatchLeaseExpiresAt = dispatch.leaseExpiresAt,
-                    executionOwner = status.activeServiceOwnerToken,
-                    executionEpoch = status.executionEpoch,
-                    serviceLeaseOwner = status.serviceLeaseOwner,
-                    serviceLeaseExpiresAt = status.serviceLeaseExpiresAt,
-                    heartbeatAt = status.heartbeatAt,
-                    arrivingSlot = arrivingSlot,
-                    arrivingRecoveryTriggerEpochMillis = null,
-                    slotA = slotA,
-                    slotB = slotB,
-                    nowEpochMillis = nowEpochMillis,
-                    maxHeartbeatAgeMillis = maxHeartbeatAgeMillis,
-                )
-            }
-            .getOrNull()
+    ): WakeDispatchInput? {
+        // Keep Room reads outside the validation catch: storage failures must remain observable.
+        val migration = dao.migrationState() ?: return null
+        val snapshot = dao.snapshot(event.snapshotId) ?: return null
+        val status = dao.status(event.snapshotId) ?: return null
+        return try {
+            require(dispatch.eventKey == event.canonicalKey())
+            require(dispatch.snapshotId == event.snapshotId)
+            require(dispatch.eventKind == event.kind.name)
+            require(dispatch.expectedTriggerEpochMs == event.expectedTriggerEpochMillis)
+            require(dispatch.expectedTriggerEpochMs >= 0L)
+            WakeDispatchState.valueOf(dispatch.state)
+            require(dispatch.dispatchAttemptId >= 0L)
+            require(dispatch.attemptCount >= 0L)
+            require(dispatch.armedPrimary in 0..1)
+            checkNonNegative(dispatch.leaseExpiresAt, dispatch.lastAttemptAt)
+            checkLeasePair(dispatch.leaseOwner, dispatch.leaseExpiresAt)
+            val slotA = dispatch.slot(WakeRecoverySlotId.A)
+            val slotB = dispatch.slot(WakeRecoverySlotId.B)
+            require(migration.id == 1)
+            snapshot.requireCanonicalFor(event)
+            require(migration.activeGeneration == snapshot.scheduleGeneration)
+            require(status.snapshotId == snapshot.id)
+            status.toPureWakeRecoveryRunStatus()
+            WakeDispatchInput(
+                event = event,
+                state = WakeDispatchState.valueOf(dispatch.state),
+                scheduleOwner = WakeScheduleOwner.valueOf(migration.scheduleOwner),
+                dispatchAttemptId = dispatch.dispatchAttemptId,
+                dispatchLeaseOwner = dispatch.leaseOwner,
+                dispatchLeaseExpiresAt = dispatch.leaseExpiresAt,
+                executionOwner = status.activeServiceOwnerToken,
+                executionEpoch = status.executionEpoch,
+                serviceLeaseOwner = status.serviceLeaseOwner,
+                serviceLeaseExpiresAt = status.serviceLeaseExpiresAt,
+                heartbeatAt = status.heartbeatAt,
+                arrivingSlot = arrivingSlot,
+                arrivingRecoveryTriggerEpochMillis = null,
+                slotA = slotA,
+                slotB = slotB,
+                nowEpochMillis = nowEpochMillis,
+                maxHeartbeatAgeMillis = maxHeartbeatAgeMillis,
+            )
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+    }
 
     private fun WakeEventDispatchEntity.slot(id: WakeRecoverySlotId): WakeRecoverySlot {
         val stateText = if (id == WakeRecoverySlotId.A) recoverySlotAState else recoverySlotBState
         val trigger = if (id == WakeRecoverySlotId.A) recoverySlotAAt else recoverySlotBAt
         val token = if (id == WakeRecoverySlotId.A) recoverySlotAToken else recoverySlotBToken
         val state = WakeRecoverySlotState.valueOf(stateText)
-        check(token >= 0L)
-        check((state in LIVE_SLOT_STATES) == (trigger != null))
+        require(token >= 0L)
+        require((state in LIVE_SLOT_STATES) == (trigger != null))
         return WakeRecoverySlot(state, trigger, token)
     }
 
@@ -364,12 +466,20 @@ private constructor(
         }
 
     private fun checkNonNegative(vararg epochs: Long?) {
-        check(epochs.all { it == null || it >= 0L })
+        require(epochs.all { it == null || it >= 0L })
     }
 
     private fun checkLeasePair(owner: String?, expiresAt: Long?) {
-        check((owner == null) == (expiresAt == null))
+        require((owner == null) == (expiresAt == null))
     }
+
+    private fun result(
+        outcome: WakeEventStoreOutcome,
+        dispatch: WakeEventDispatchEntity? = null,
+        convergence: WakeEventConvergence? = null,
+        authorization: WakeDispatchAuthorization? = null,
+    ): WakeEventStoreResult =
+        WakeEventStoreResultFactory.create(outcome, dispatch, convergence, authorization)
 
     private enum class ArrivalGate {
         VALID,
@@ -379,8 +489,10 @@ private constructor(
     }
 
     private companion object {
+        const val DISPATCH_LEASE_MILLIS = 60_000L
         const val BEFORE_CAS = "BEFORE_CAS"
         const val AFTER_CAS = "AFTER_CAS"
+        const val BEFORE_RETURN = "BEFORE_RETURN"
         val RECOVERY_DELIVERABLE_STATES =
             setOf(
                 WakeRecoverySlotState.ARMED,
@@ -405,5 +517,7 @@ private constructor(
                 "SUPERSEDED",
                 "EXPIRED",
             )
+        val TERMINAL_STATUS_STATES =
+            setOf("COMPLETED", "NO_CONFIRMATION", "FAILED", "CANCELLED", "SUPERSEDED", "EXPIRED")
     }
 }
