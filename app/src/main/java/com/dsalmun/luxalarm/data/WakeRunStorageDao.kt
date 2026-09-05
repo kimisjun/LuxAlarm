@@ -33,7 +33,7 @@ abstract class WakeRunStorageDao {
         }
 
         insertSnapshot(snapshot)
-        insertPreparedStatus(preparedStatus(snapshot.id))
+        insertPreparedStatus(preparedWakeRunStatus(snapshot.id))
         if (trackId != null) {
             insertLease(TrackLeaseEntity(snapshot.id, trackId, acquiredAt))
             recomputeTrackRefCount(trackId)
@@ -169,27 +169,27 @@ abstract class WakeRunStorageDao {
     )
     protected abstract fun recomputeTrackRefCount(trackId: String)
 
-    private fun preparedStatus(snapshotId: String) =
-        WakeRunStatusEntity(
-            snapshotId = snapshotId,
-            state = "PREPARED",
-            processedStartAt = null,
-            processedGoalAt = null,
-            activeServiceOwnerToken = null,
-            executionEpoch = 0,
-            serviceLeaseOwner = null,
-            serviceLeaseExpiresAt = null,
-            heartbeatAt = null,
-            armedStart = 0,
-            armedGoal = 0,
-            startedAt = null,
-            completedAt = null,
-            cancelledAt = null,
-            failureReason = null,
-        )
-
     private companion object {
         const val SQLITE_BIND_BATCH_SIZE = 900
         const val MAX_DELETION_TOKEN_LENGTH = 128
     }
 }
+
+internal fun preparedWakeRunStatus(snapshotId: String) =
+    WakeRunStatusEntity(
+        snapshotId = snapshotId,
+        state = "PREPARED",
+        processedStartAt = null,
+        processedGoalAt = null,
+        activeServiceOwnerToken = null,
+        executionEpoch = 0,
+        serviceLeaseOwner = null,
+        serviceLeaseExpiresAt = null,
+        heartbeatAt = null,
+        armedStart = 0,
+        armedGoal = 0,
+        startedAt = null,
+        completedAt = null,
+        cancelledAt = null,
+        failureReason = null,
+    )
