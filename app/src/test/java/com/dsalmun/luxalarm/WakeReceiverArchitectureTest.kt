@@ -128,6 +128,34 @@ class WakeReceiverArchitectureTest {
     }
 
     @Test
+    fun startPrimarySchedulerCanReachAndroidTokensOnlyThroughCanonicalFactory() {
+        val scheduler =
+            File(root, "app/src/main/java/com/dsalmun/luxalarm/StartPrimaryWakeScheduler.kt")
+                .readText()
+        val factory =
+            File(root, "app/src/main/java/com/dsalmun/luxalarm/WakePendingIntentFactory.kt")
+                .readText()
+
+        assertTrue(scheduler.contains("WakePendingIntentFactory.createPrimary(context, event)"))
+        listOf(
+                "PendingIntent.getBroadcast",
+                "WakePendingIntentData.",
+                "Uri.parse",
+                ".setData(",
+                ".putExtra(",
+                "extras",
+            )
+            .forEach { forbidden ->
+                assertFalse(scheduler.contains(forbidden), "scheduler contains $forbidden")
+            }
+        assertEquals(1, Regex("PendingIntent.getBroadcast").findAll(factory).count())
+        assertTrue(factory.contains("WakePendingIntentData.primary(event)"))
+        assertTrue(factory.contains("WakePendingIntentData.dynamic(event"))
+        assertTrue(factory.contains("WakePendingIntentData.anchor(event"))
+        assertFalse(factory.contains(".putExtra("))
+    }
+
+    @Test
     fun trustedImplementationsExposeNoConstructorOrCreateBypassIncludingSyntheticBytecode() {
         val start = WakeEventIdentity("surface-start", WakeEventKind.START, 1_000L)
         val goal = WakeEventIdentity("surface-goal", WakeEventKind.GOAL, 2_000L)
