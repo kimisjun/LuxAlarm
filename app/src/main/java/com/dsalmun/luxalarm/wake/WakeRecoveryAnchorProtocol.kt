@@ -5,6 +5,11 @@
 package com.dsalmun.luxalarm.wake
 
 internal const val WAKE_RECOVERY_DEADLINE_OFFSET_MILLIS = 30L * 60L * 1_000L
+/**
+ * First dynamic watchdog leads the reducer's subsequent 25-second alternating-slot cadence by ten
+ * seconds, giving the primary delivery a short initial grace period without waiting a full cadence.
+ */
+internal const val INITIAL_DYNAMIC_RECOVERY_DELAY_MILLIS = 15_000L
 internal const val MAX_WAKE_ANCHOR_PI_IDENTITY_ASCII_CHARS = 512
 
 internal enum class WakeRecoveryAnchorKind(private val offsetMillis: Long) {

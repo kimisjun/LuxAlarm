@@ -38,4 +38,20 @@ internal interface WakePrimaryScheduleDao {
         """
     )
     fun markPrimaryApiReturned(eventKey: String, triggerEpochMillis: Long): Int
+
+    @Query(
+        """
+        UPDATE wake_event_dispatch
+        SET recovery_slot_a_at = :triggerEpochMillis,
+            recovery_slot_a_state = 'ARMED'
+        WHERE event_key = :eventKey
+          AND recovery_slot_a_at IS NULL
+          AND recovery_slot_a_state = 'CONSUMED'
+          AND recovery_slot_a_token = 0
+          AND recovery_slot_b_at IS NULL
+          AND recovery_slot_b_state = 'CONSUMED'
+          AND recovery_slot_b_token = 0
+        """
+    )
+    fun markInitialDynamicAApiReturned(eventKey: String, triggerEpochMillis: Long): Int
 }

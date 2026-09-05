@@ -6,6 +6,7 @@ package com.dsalmun.luxalarm
 
 import android.content.Context
 import com.dsalmun.luxalarm.data.RoomWakePrimaryScheduleStore
+import com.dsalmun.luxalarm.data.WakeDynamicScheduleRequest
 import com.dsalmun.luxalarm.data.WakeRunSnapshotEntity
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
@@ -41,6 +42,7 @@ private constructor(
         anchors.forEach { (kind, trigger) ->
             scheduleAnchorAndRecord(snapshot, goal, kind, trigger)
         }
+        plan.dynamicRequests.forEach { scheduleDynamicAndRecord(snapshot, it) }
     }
 
     private fun scheduleAndRecord(snapshot: WakeRunSnapshotEntity, event: WakeEventIdentity) {
@@ -66,5 +68,26 @@ private constructor(
         check(trigger > finalNow) { "Immutable anchor trigger is not strictly in the future" }
         alarmClockPort.schedule(trigger, operation)
         store.recordAnchorApiReturn(snapshot, goal, kind)
+    }
+
+    private fun scheduleDynamicAndRecord(
+        snapshot: WakeRunSnapshotEntity,
+        request: WakeDynamicScheduleRequest,
+    ) {
+        store.preflightDynamicApiCall(snapshot, request)
+        val operation =
+            WakePendingIntentFactory.createDynamic(
+                context,
+                request.event,
+                request.slot,
+                request.token,
+                request.triggerEpochMillis,
+            )
+        val finalNow = epochClock()
+        check(request.triggerEpochMillis > finalNow) {
+            "Dynamic recovery trigger is not strictly in the future"
+        }
+        alarmClockPort.schedule(request.triggerEpochMillis, operation)
+        store.recordDynamicApiReturn(snapshot, request)
     }
 }

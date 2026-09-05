@@ -161,8 +161,10 @@ class WakeReceiverArchitectureTest {
             File(root, "app/src/main/java/com/dsalmun/luxalarm/PrimaryWakeScheduleCoordinator.kt")
                 .readText()
         assertTrue(coordinator.contains("WakePendingIntentFactory.createPrimary(context, event)"))
+        assertTrue(coordinator.contains("WakePendingIntentFactory.createDynamic("))
         assertTrue(coordinator.contains("alarmClockPort.schedule("))
         assertTrue(coordinator.contains("store.recordApiReturn(snapshot, event)"))
+        assertTrue(coordinator.contains("store.recordDynamicApiReturn(snapshot, request)"))
         val scheduleBody = coordinator.substringAfter("private fun scheduleAndRecord")
         val createIndex =
             scheduleBody.indexOf("WakePendingIntentFactory.createPrimary(context, event)")
@@ -179,6 +181,18 @@ class WakeReceiverArchitectureTest {
             coordinator.indexOf("alarmClockPort.schedule(") <
                 coordinator.indexOf("store.recordApiReturn(snapshot, event)")
         )
+        val dynamicBody = coordinator.substringAfter("private fun scheduleDynamicAndRecord")
+        val dynamicPreflightIndex =
+            dynamicBody.indexOf("store.preflightDynamicApiCall(snapshot, request)")
+        val dynamicCreateIndex = dynamicBody.indexOf("WakePendingIntentFactory.createDynamic(")
+        val dynamicClockIndex = dynamicBody.indexOf("val finalNow = epochClock()")
+        val dynamicScheduleIndex = dynamicBody.indexOf("alarmClockPort.schedule(")
+        val dynamicRecordIndex =
+            dynamicBody.indexOf("store.recordDynamicApiReturn(snapshot, request)")
+        assertTrue(dynamicPreflightIndex in 0 until dynamicCreateIndex)
+        assertTrue(dynamicCreateIndex < dynamicClockIndex)
+        assertTrue(dynamicClockIndex < dynamicScheduleIndex)
+        assertTrue(dynamicScheduleIndex < dynamicRecordIndex)
         listOf(
                 "PendingIntent.getBroadcast",
                 "WakePendingIntentData.",

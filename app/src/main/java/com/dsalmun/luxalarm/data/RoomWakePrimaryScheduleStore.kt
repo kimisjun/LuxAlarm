@@ -5,20 +5,38 @@
 package com.dsalmun.luxalarm.data
 
 import com.dsalmun.luxalarm.wake.CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS
+import com.dsalmun.luxalarm.wake.INITIAL_DYNAMIC_RECOVERY_DELAY_MILLIS
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
 import com.dsalmun.luxalarm.wake.WakePendingIntentData
 import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
+import com.dsalmun.luxalarm.wake.WakeRecoverySlotId
+
+internal data class WakeDynamicScheduleRequest(
+    val event: WakeEventIdentity,
+    val slot: WakeRecoverySlotId,
+    val token: Long,
+    val triggerEpochMillis: Long,
+)
 
 internal data class WakePrimarySchedulePlan(
     val primaryEvents: List<WakeEventIdentity>,
     val anchorKinds: List<WakeRecoveryAnchorKind>,
+    val dynamicRequests: List<WakeDynamicScheduleRequest>,
 )
 
 private data class CanonicalAnchorProgress(
-    val hasAnyApiReturn: Boolean,
-    val hasProgressedState: Boolean,
+    val expectedGoalDispatchState: String,
+    val primaryProjections: Map<WakeEventKind, ProjectionEvidence>,
+    val anchorProjections: Map<WakeRecoveryAnchorKind, ProjectionEvidence>,
+    val dynamicProjections: Map<WakeEventKind, ProjectionEvidence>,
 )
+
+private enum class ProjectionEvidence {
+    MISSING,
+    API_RETURNED,
+    PROGRESSED,
+}
 
 /**
  * Durable successful-API-return records for primary wake alarms and immutable GOAL anchors.
@@ -70,38 +88,54 @@ private constructor(
                         "Immutable anchor trigger overflows epoch range"
                     }
                 }
-            if (!anchorProgress.hasAnyApiReturn) {
-                check(primaries.all { it.expectedTriggerEpochMillis > nowEpochMillis }) {
-                    "Primary trigger is not strictly in the future"
-                }
-                check(anchorTriggers.values.all { it > nowEpochMillis }) {
-                    "Immutable anchor trigger is not strictly in the future"
-                }
-            } else {
-                primaries
-                    .filter { it.expectedTriggerEpochMillis <= nowEpochMillis }
-                    .forEach { event ->
-                        check(
-                            current.single { it.eventKey == event.canonicalKey() }.armedPrimary == 1
-                        ) {
-                            "Expired primary lacks durable API-return evidence"
-                        }
-                    }
-                val anchorsByKind = dao.anchors(goal.canonicalKey()).associateBy { it.anchorKind }
-                anchorTriggers
-                    .filterValues { it <= nowEpochMillis }
-                    .keys
-                    .forEach { kind ->
-                        check(anchorsByKind.containsKey(kind.name)) {
-                            "Expired immutable anchor lacks durable API-return evidence"
-                        }
-                    }
+            val dynamicRequests = canonicalInitialDynamicRequests(snapshot)
+            val primaryProjections = primaries.associateWith { event ->
+                anchorProgress.primaryProjections.getValue(event.kind)
             }
+            check(
+                primaryProjections.none { (event, evidence) ->
+                    event.expectedTriggerEpochMillis <= nowEpochMillis &&
+                        evidence == ProjectionEvidence.MISSING
+                }
+            ) {
+                "Expired primary lacks durable API-return evidence"
+            }
+            check(
+                anchorTriggers.none { (kind, trigger) ->
+                    trigger <= nowEpochMillis &&
+                        anchorProgress.anchorProjections.getValue(kind) ==
+                            ProjectionEvidence.MISSING
+                }
+            ) {
+                "Expired immutable anchor lacks durable API-return evidence"
+            }
+            dynamicRequests
+                .filter { it.triggerEpochMillis <= nowEpochMillis }
+                .forEach { request ->
+                    check(
+                        anchorProgress.dynamicProjections.getValue(request.event.kind) !=
+                            ProjectionEvidence.MISSING
+                    ) {
+                        "Expired dynamic recovery lacks durable API-return evidence"
+                    }
+                }
             WakePrimarySchedulePlan(
-                primaryEvents = primaries.filter { it.expectedTriggerEpochMillis > nowEpochMillis },
+                primaryEvents =
+                    primaries.filter {
+                        it.expectedTriggerEpochMillis > nowEpochMillis &&
+                            primaryProjections.getValue(it) != ProjectionEvidence.PROGRESSED
+                    },
                 anchorKinds =
                     CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.filter {
-                        anchorTriggers.getValue(it) > nowEpochMillis
+                        anchorTriggers.getValue(it) > nowEpochMillis &&
+                            anchorProgress.anchorProjections.getValue(it) !=
+                                ProjectionEvidence.PROGRESSED
+                    },
+                dynamicRequests =
+                    dynamicRequests.filter {
+                        it.triggerEpochMillis > nowEpochMillis &&
+                            anchorProgress.dynamicProjections.getValue(it.event.kind) !=
+                                ProjectionEvidence.PROGRESSED
                     },
             )
         }
@@ -144,21 +178,25 @@ private constructor(
             requirePreparingAggregate(snapshot)
             val dao = database.wakePrimaryScheduleDao()
             val current = dao.dispatches(snapshot.id)
-            requireCanonicalPrimaryRows(dao, snapshot, current)
+            val progress = requireCanonicalPrimaryRows(dao, snapshot, current)
             val row = checkNotNull(current.singleOrNull { it.eventKey == event.canonicalKey() })
             check(row.expectedTriggerEpochMs == event.expectedTriggerEpochMillis) {
                 "Primary trigger conflicts with the desired snapshot"
             }
-            if (row.armedPrimary == 0) {
-                check(
-                    dao.markPrimaryApiReturned(
-                        event.canonicalKey(),
-                        event.expectedTriggerEpochMillis,
-                    ) == 1
-                ) {
-                    "Primary API-return record lost its compare-and-set"
+            when (progress.primaryProjections.getValue(event.kind)) {
+                ProjectionEvidence.API_RETURNED,
+                ProjectionEvidence.PROGRESSED -> Unit
+                ProjectionEvidence.MISSING -> {
+                    check(
+                        dao.markPrimaryApiReturned(
+                            event.canonicalKey(),
+                            event.expectedTriggerEpochMillis,
+                        ) == 1
+                    ) {
+                        "Primary API-return record lost its compare-and-set"
+                    }
+                    faultHook("AFTER_${event.kind.name}_PRIMARY_API_RETURN_RECORD")
                 }
-                faultHook("AFTER_${event.kind.name}_PRIMARY_API_RETURN_RECORD")
             }
         }
     }
@@ -174,8 +212,8 @@ private constructor(
             requirePreparingAggregate(snapshot)
             val dao = database.wakePrimaryScheduleDao()
             val current = dao.dispatches(snapshot.id)
-            requireCanonicalPrimaryRows(dao, snapshot, current)
-            check(current.all { it.armedPrimary == 1 }) {
+            val progress = requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(progress.primaryProjections.values.none { it == ProjectionEvidence.MISSING }) {
                 "Immutable anchors require successful GOAL and START primary API returns"
             }
         }
@@ -192,8 +230,8 @@ private constructor(
             requirePreparingAggregate(snapshot)
             val dao = database.wakePrimaryScheduleDao()
             val current = dao.dispatches(snapshot.id)
-            requireCanonicalPrimaryRows(dao, snapshot, current)
-            check(current.all { it.armedPrimary == 1 }) {
+            val progress = requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(progress.primaryProjections.values.none { it == ProjectionEvidence.MISSING }) {
                 "Immutable anchors require successful GOAL and START primary API returns"
             }
             val desired = canonicalAnchor(event, kind)
@@ -210,6 +248,68 @@ private constructor(
                 )
             ) {
                 "Anchor API-return record is noncanonical"
+            }
+        }
+    }
+
+    fun preflightDynamicApiCall(
+        snapshot: WakeRunSnapshotEntity,
+        request: WakeDynamicScheduleRequest,
+    ) {
+        requireInitialDynamicRequest(snapshot, request)
+        database.runInTransaction {
+            requirePreparingAggregate(snapshot)
+            val dao = database.wakePrimaryScheduleDao()
+            val current = dao.dispatches(snapshot.id)
+            val progress = requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(progress.primaryProjections.values.none { it == ProjectionEvidence.MISSING }) {
+                "Dynamic recovery requires successful GOAL and START primary API returns"
+            }
+            val goal = WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs)
+            check(
+                dao.anchors(goal.canonicalKey()).size ==
+                    CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.size
+            ) {
+                "Dynamic recovery requires all immutable anchor API returns"
+            }
+        }
+    }
+
+    fun recordDynamicApiReturn(
+        snapshot: WakeRunSnapshotEntity,
+        request: WakeDynamicScheduleRequest,
+    ) {
+        requireInitialDynamicRequest(snapshot, request)
+        database.runInTransaction {
+            requirePreparingAggregate(snapshot)
+            val dao = database.wakePrimaryScheduleDao()
+            val current = dao.dispatches(snapshot.id)
+            val progress = requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(progress.primaryProjections.values.none { it == ProjectionEvidence.MISSING }) {
+                "Dynamic recovery requires successful GOAL and START primary API returns"
+            }
+            val goal = WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs)
+            check(
+                dao.anchors(goal.canonicalKey()).size ==
+                    CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.size
+            ) {
+                "Dynamic recovery requires all immutable anchor API returns"
+            }
+            when (progress.dynamicProjections.getValue(request.event.kind)) {
+                ProjectionEvidence.API_RETURNED,
+                ProjectionEvidence.PROGRESSED -> Unit
+                ProjectionEvidence.MISSING -> {
+                    val row = current.single { it.eventKey == request.event.canonicalKey() }
+                    check(
+                        dao.markInitialDynamicAApiReturned(
+                            row.eventKey,
+                            request.triggerEpochMillis,
+                        ) == 1
+                    ) {
+                        "Dynamic API-return record lost its compare-and-set"
+                    }
+                    faultHook("AFTER_${request.event.kind.name}_DYNAMIC_A_API_RETURN_RECORD")
+                }
             }
         }
     }
@@ -269,36 +369,94 @@ private constructor(
         snapshot: WakeRunSnapshotEntity,
         current: List<WakeEventDispatchEntity>,
     ): CanonicalAnchorProgress {
-        val armedByKind = current.associate { it.eventKind to it.armedPrimary }
         check(
-            armedByKind.keys == setOf("START", "GOAL") &&
-                current.size == 2 &&
-                armedByKind.values.all { it in 0..1 }
+            current.size == 2 &&
+                current.map { it.eventKind }.toSet() == setOf("START", "GOAL") &&
+                current.all { it.armedPrimary in 0..1 }
         ) {
             "Primary scheduling requires exactly canonical START and GOAL dispatch rows"
         }
         val anchorProgress = requireCanonicalAnchors(dao, snapshot, current)
-        val canonical =
-            canonicalDispatches(
-                snapshot,
-                armedByKind.getValue("START"),
-                armedByKind.getValue("GOAL"),
-            )
-        val goalState = current.single { it.eventKind == "GOAL" }.state
-        val accepted =
-            if (anchorProgress.hasProgressedState && goalState == "DEFERRED") {
-                canonical.map { if (it.eventKind == "GOAL") it.copy(state = "DEFERRED") else it }
-            } else {
-                canonical
+        val canonical = canonicalDispatches(snapshot, armedStart = 0, armedGoal = 0)
+        val dynamicProjections = canonical.associate { expected ->
+            val actual = current.single { it.eventKey == expected.eventKey }
+            val trigger = initialDynamicTrigger(expected.expectedTriggerEpochMs)
+            val projection =
+                when {
+                    isInitialDynamicAApiReturn(actual, trigger) -> ProjectionEvidence.API_RETURNED
+                    isProgressedInitialDynamicA(actual) -> ProjectionEvidence.PROGRESSED
+                    else -> ProjectionEvidence.MISSING
+                }
+            WakeEventKind.valueOf(expected.eventKind) to projection
+        }
+        val hasDependentApiReturnEvidence =
+            anchorProgress.anchorProjections.values.any { it != ProjectionEvidence.MISSING } ||
+                dynamicProjections.values.any { it != ProjectionEvidence.MISSING }
+        val primaryProjections = canonical.associate { expected ->
+            val kind = WakeEventKind.valueOf(expected.eventKind)
+            val dynamicProjection = dynamicProjections.getValue(kind)
+            val dynamicExpected =
+                when (dynamicProjection) {
+                    ProjectionEvidence.MISSING -> expected
+                    ProjectionEvidence.API_RETURNED ->
+                        expected.copy(
+                            recoverySlotAAt =
+                                initialDynamicTrigger(expected.expectedTriggerEpochMs),
+                            recoverySlotAState = "ARMED",
+                        )
+                    ProjectionEvidence.PROGRESSED ->
+                        expected.copy(state = "DEFERRED", recoverySlotAToken = 1L)
+                }
+            val hasNonPrimaryProgress = dynamicProjection == ProjectionEvidence.PROGRESSED
+            val expectedDispatchState =
+                if (kind == WakeEventKind.GOAL) {
+                    anchorProgress.expectedGoalDispatchState
+                } else if (hasNonPrimaryProgress) {
+                    "DEFERRED"
+                } else {
+                    dynamicExpected.state
+                }
+            val apiReturnedExpected =
+                dynamicExpected.copy(
+                    state = expectedDispatchState,
+                    armedPrimary = 1,
+                )
+            val progressedExpected = apiReturnedExpected.copy(state = "DEFERRED", armedPrimary = 0)
+            val actual = current.single { it.eventKey == expected.eventKey }
+            val projection =
+                when {
+                    actual == apiReturnedExpected -> ProjectionEvidence.API_RETURNED
+                    kind == WakeEventKind.START && actual == progressedExpected ->
+                        ProjectionEvidence.PROGRESSED
+                    !hasDependentApiReturnEvidence && actual == expected ->
+                        ProjectionEvidence.MISSING
+                    else -> error("Primary scheduling found noncanonical dispatch rows")
+                }
+            kind to projection
+        }
+        if (anchorProgress.anchorProjections.values.any { it != ProjectionEvidence.MISSING }) {
+            check(primaryProjections.values.none { it == ProjectionEvidence.MISSING }) {
+                "Immutable anchor records require both primary API returns"
             }
-        check(current == accepted) {
-            "Primary scheduling found noncanonical dispatch rows"
+        }
+        if (dynamicProjections.values.any { it != ProjectionEvidence.MISSING }) {
+            check(
+                primaryProjections.values.none { it == ProjectionEvidence.MISSING } &&
+                    anchorProgress.anchorProjections.values.none {
+                        it == ProjectionEvidence.MISSING
+                    }
+            ) {
+                "Dynamic recovery evidence requires all prerequisite API returns"
+            }
         }
         val eventKeys = current.map { it.eventKey }
         check(dao.outboxCount(eventKeys) == 0L) {
             "Primary scheduling found unsupported outbox rows"
         }
-        return anchorProgress
+        return anchorProgress.copy(
+            primaryProjections = primaryProjections,
+            dynamicProjections = dynamicProjections,
+        )
     }
 
     private fun requireCanonicalAnchors(
@@ -324,14 +482,24 @@ private constructor(
         ) {
             "Primary scheduling found immutable anchors outside GOAL"
         }
-        if (anchors.isNotEmpty()) {
-            check(dispatches.all { it.armedPrimary == 1 }) {
-                "Immutable anchor records require both primary API returns"
-            }
-        }
         return CanonicalAnchorProgress(
-            hasAnyApiReturn = anchors.isNotEmpty(),
-            hasProgressedState = anchors.any { it.state == "FIRED" || it.state == "CONSUMED" },
+            expectedGoalDispatchState =
+                if (anchors.any { it.state == "CONSUMED" }) "DEFERRED" else "RECEIVED",
+            primaryProjections = emptyMap(),
+            anchorProjections =
+                desired.associate { expected ->
+                    val kind = WakeRecoveryAnchorKind.valueOf(expected.anchorKind)
+                    val actual = anchors.singleOrNull { it.anchorKind == expected.anchorKind }
+                    kind to
+                        when (actual?.state) {
+                            null -> ProjectionEvidence.MISSING
+                            "ARMED" -> ProjectionEvidence.API_RETURNED
+                            "FIRED",
+                            "CONSUMED" -> ProjectionEvidence.PROGRESSED
+                            else -> error("Unsupported immutable anchor state")
+                        }
+                },
+            dynamicProjections = emptyMap(),
         )
     }
 
@@ -354,6 +522,59 @@ private constructor(
             "GOAL_PRIMARY is not an immutable recovery anchor"
         }
     }
+
+    private fun requireInitialDynamicRequest(
+        snapshot: WakeRunSnapshotEntity,
+        request: WakeDynamicScheduleRequest,
+    ) {
+        val expected =
+            canonicalInitialDynamicRequests(snapshot).singleOrNull {
+                it.event.kind == request.event.kind
+            }
+        require(request == expected) { "Dynamic recovery request is not canonical" }
+    }
+
+    private fun canonicalInitialDynamicRequests(snapshot: WakeRunSnapshotEntity) =
+        listOf(
+                WakeEventIdentity(snapshot.id, WakeEventKind.START, snapshot.wakeStartEpochMs),
+                WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs),
+            )
+            .map { event ->
+                WakeDynamicScheduleRequest(
+                    event = event,
+                    slot = WakeRecoverySlotId.A,
+                    token = 0L,
+                    triggerEpochMillis = initialDynamicTrigger(event.expectedTriggerEpochMillis),
+                )
+            }
+
+    private fun initialDynamicTrigger(primaryTriggerEpochMillis: Long): Long =
+        checkNotNull(
+            primaryTriggerEpochMillis
+                .takeIf { it <= Long.MAX_VALUE - INITIAL_DYNAMIC_RECOVERY_DELAY_MILLIS }
+                ?.plus(INITIAL_DYNAMIC_RECOVERY_DELAY_MILLIS)
+        ) {
+            "Dynamic recovery trigger overflows epoch range"
+        }
+
+    private fun isInitialDynamicAApiReturn(
+        row: WakeEventDispatchEntity,
+        triggerEpochMillis: Long,
+    ): Boolean =
+        row.recoverySlotAAt == triggerEpochMillis &&
+            row.recoverySlotAState == "ARMED" &&
+            row.recoverySlotAToken == 0L &&
+            row.recoverySlotBAt == null &&
+            row.recoverySlotBState == "CONSUMED" &&
+            row.recoverySlotBToken == 0L
+
+    private fun isProgressedInitialDynamicA(row: WakeEventDispatchEntity): Boolean =
+        row.recoverySlotAAt == null &&
+            row.recoverySlotAState == "CONSUMED" &&
+            row.recoverySlotAToken == 1L &&
+            row.recoverySlotBAt == null &&
+            row.recoverySlotBState == "CONSUMED" &&
+            row.recoverySlotBToken == 0L
 
     private fun canonicalAnchor(
         event: WakeEventIdentity,
