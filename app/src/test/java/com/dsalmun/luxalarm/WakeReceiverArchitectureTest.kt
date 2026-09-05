@@ -156,6 +156,45 @@ class WakeReceiverArchitectureTest {
     }
 
     @Test
+    fun primaryCoordinatorRoutesAndroidTokensAndDurabilityThroughCanonicalBoundariesOnly() {
+        val coordinator =
+            File(root, "app/src/main/java/com/dsalmun/luxalarm/PrimaryWakeScheduleCoordinator.kt")
+                .readText()
+        assertTrue(coordinator.contains("WakePendingIntentFactory.createPrimary(context, event)"))
+        assertTrue(coordinator.contains("alarmClockPort.schedule("))
+        assertTrue(coordinator.contains("store.recordApiReturn(snapshot, event)"))
+        val scheduleBody = coordinator.substringAfter("private fun scheduleAndRecord")
+        val createIndex =
+            scheduleBody.indexOf("WakePendingIntentFactory.createPrimary(context, event)")
+        val preflightIndex = scheduleBody.indexOf("store.preflightApiCall(snapshot, event)")
+        val finalClockIndex = scheduleBody.indexOf("val finalNow = epochClock()")
+        val scheduleIndex = scheduleBody.indexOf("alarmClockPort.schedule(")
+        assertTrue(preflightIndex in 0 until createIndex)
+        assertTrue(createIndex < finalClockIndex)
+        assertTrue(finalClockIndex < scheduleIndex)
+        val finalClockToOsCall = scheduleBody.substring(finalClockIndex, scheduleIndex)
+        assertFalse(finalClockToOsCall.contains("createPrimary"))
+        assertFalse(finalClockToOsCall.contains("preflightApiCall"))
+        assertTrue(
+            coordinator.indexOf("alarmClockPort.schedule(") <
+                coordinator.indexOf("store.recordApiReturn(snapshot, event)")
+        )
+        listOf(
+                "PendingIntent.getBroadcast",
+                "WakePendingIntentData.",
+                "Uri.parse",
+                ".setData(",
+                ".putExtra(",
+                "FLAG_NO_CREATE",
+                "AlarmDatabase",
+                "wakePrimaryScheduleDao",
+            )
+            .forEach { forbidden ->
+                assertFalse(coordinator.contains(forbidden), "coordinator contains $forbidden")
+            }
+    }
+
+    @Test
     fun trustedImplementationsExposeNoConstructorOrCreateBypassIncludingSyntheticBytecode() {
         val start = WakeEventIdentity("surface-start", WakeEventKind.START, 1_000L)
         val goal = WakeEventIdentity("surface-goal", WakeEventKind.GOAL, 2_000L)
