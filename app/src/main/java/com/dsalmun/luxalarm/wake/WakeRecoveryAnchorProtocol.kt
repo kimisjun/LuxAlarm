@@ -21,6 +21,14 @@ internal enum class WakeRecoveryAnchorKind(private val offsetMillis: Long) {
     }
 }
 
+internal val CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS =
+    listOf(
+        WakeRecoveryAnchorKind.GOAL_PLUS_1M,
+        WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+        WakeRecoveryAnchorKind.GOAL_PLUS_15M,
+        WakeRecoveryAnchorKind.GOAL_PLUS_30M,
+    )
+
 internal enum class WakeRecoveryAnchorState {
     ARMED,
     FIRED,

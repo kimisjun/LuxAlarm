@@ -11,13 +11,21 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.data.AlarmDatabase
 import com.dsalmun.luxalarm.data.RoomWakePrimaryScheduleStore
+import com.dsalmun.luxalarm.data.RoomWakeRecoveryAnchorProcessingStore
+import com.dsalmun.luxalarm.data.RoomWakeRecoveryAnchorReceiptStore
 import com.dsalmun.luxalarm.data.RoomWakeSchedulePreparationStore
+import com.dsalmun.luxalarm.data.WakeRecoveryAnchorProcessingOutcome
+import com.dsalmun.luxalarm.data.WakeRecoveryAnchorReceiptStoreOutcome
 import com.dsalmun.luxalarm.data.WakeRunSnapshotEntity
 import com.dsalmun.luxalarm.data.primaryScheduleStoreWithFaultHook
 import com.dsalmun.luxalarm.data.primaryWakeScheduleCoordinatorWithClock
+import com.dsalmun.luxalarm.wake.WakeDispatchAuthorizationFactory
+import com.dsalmun.luxalarm.wake.WakeDispatchSourceKind
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
 import com.dsalmun.luxalarm.wake.WakePendingIntentData
+import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorDelivery
+import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -58,6 +66,45 @@ class PrimaryWakeScheduleCoordinatorTest {
     }
 
     @Test
+    fun successfulPrimariesAreFollowedByFourCanonicalDurableGoalAnchorsInOffsetOrder() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, acquiredAtEpochMillis = 900L)
+        val calls = mutableListOf<Pair<Long, PendingIntent>>()
+
+        coordinator(WakeAlarmClockPort { trigger, operation -> calls += trigger to operation })
+            .schedule(desired)
+
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        val anchorKinds =
+            listOf(
+                WakeRecoveryAnchorKind.GOAL_PLUS_1M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_15M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_30M,
+            )
+        assertEquals(
+            listOf(80_000L, 70_000L, 140_000L, 380_000L, 980_000L, 1_880_000L),
+            calls.map { it.first },
+        )
+        assertEquals(
+            anchorKinds.map { WakePendingIntentData.anchor(goal, it) },
+            calls.drop(2).map { shadowOf(it.second).savedIntent.dataString },
+        )
+        assertEquals(
+            anchorKinds.map { kind ->
+                listOf(
+                    kind.name,
+                    checkNotNull(kind.triggerForGoalOrNull(desired.goalEpochMs)).toString(),
+                    "ARMED",
+                    WakePendingIntentData.anchor(goal, kind),
+                )
+            },
+            anchorRecords(),
+        )
+        assertEquals("GOAL=1|START=1", primaryMarkers())
+    }
+
+    @Test
     fun goalApiReturnIsRecordedBeforeStartCallAndStartReturnIsRecordedAfterItsCall() {
         val desired = snapshot()
         RoomWakeSchedulePreparationStore(database).prepare(desired, acquiredAtEpochMillis = 900L)
@@ -70,8 +117,21 @@ class PrimaryWakeScheduleCoordinatorTest {
 
         coordinator(port).schedule(desired)
 
-        assertEquals(listOf(80_000L, 70_000L), calls.map { it.first })
-        assertEquals(listOf("GOAL=0|START=0", "GOAL=1|START=0"), markersDuringCalls)
+        assertEquals(
+            listOf(80_000L, 70_000L, 140_000L, 380_000L, 980_000L, 1_880_000L),
+            calls.map { it.first },
+        )
+        assertEquals(
+            listOf(
+                "GOAL=0|START=0",
+                "GOAL=1|START=0",
+                "GOAL=1|START=1",
+                "GOAL=1|START=1",
+                "GOAL=1|START=1",
+                "GOAL=1|START=1",
+            ),
+            markersDuringCalls,
+        )
         assertEquals("GOAL=1|START=1", primaryMarkers())
         assertEquals(
             listOf(
@@ -82,9 +142,29 @@ class PrimaryWakeScheduleCoordinatorTest {
                     WakeEventIdentity(desired.id, WakeEventKind.START, desired.wakeStartEpochMs)
                 ),
             ),
-            calls.map { shadowOf(it.second).savedIntent.dataString },
+            calls.take(2).map { shadowOf(it.second).savedIntent.dataString },
         )
         assertEquals("PREPARING_WAKE|1", ownerAndGeneration())
+    }
+
+    @Test
+    fun overflowingImmutableAnchorIsRejectedByInitialValidationBeforeAnyApiCall() {
+        val desired =
+            snapshot()
+                .copy(
+                    wakeStartEpochMs = Long.MAX_VALUE - 1_800_001L,
+                    goalEpochMs = Long.MAX_VALUE - 1_799_999L,
+                )
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val before = wholeDatabaseFingerprint()
+        val calls = mutableListOf<Long>()
+
+        assertFailsWith<IllegalStateException> {
+            coordinator(WakeAlarmClockPort { trigger, _ -> calls += trigger }).schedule(desired)
+        }
+
+        assertEquals(emptyList(), calls)
+        assertEquals(before, wholeDatabaseFingerprint())
     }
 
     @Test
@@ -125,7 +205,17 @@ class PrimaryWakeScheduleCoordinatorTest {
     fun completedMarkersDoNotAuthorizeReissuingExpiredPrimaries() {
         val desired = snapshot()
         RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
-        coordinator(WakeAlarmClockPort { _, _ -> }).schedule(desired)
+        val store = RoomWakePrimaryScheduleStore(database)
+        store.ensureDesiredPrimaries(desired)
+        store.recordApiReturn(
+            desired,
+            WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs),
+        )
+        store.recordApiReturn(
+            desired,
+            WakeEventIdentity(desired.id, WakeEventKind.START, desired.wakeStartEpochMs),
+        )
+        assertEquals(0L, scalarLong("SELECT COUNT(*) FROM wake_recovery_anchor"))
         val before = wholeDatabaseFingerprint()
         val calls = mutableListOf<Long>()
 
@@ -184,6 +274,264 @@ class PrimaryWakeScheduleCoordinatorTest {
     }
 
     @Test
+    fun anchorApiFailurePropagatesExactlyAndLeavesOnlyEarlierSuccessfulReturnRecords() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val sentinel = IllegalArgumentException("five-minute anchor sentinel")
+        val calls = mutableListOf<Long>()
+
+        val thrown =
+            assertFailsWith<IllegalArgumentException> {
+                coordinator(
+                        WakeAlarmClockPort { trigger, _ ->
+                            calls += trigger
+                            if (trigger == 380_000L) throw sentinel
+                        }
+                    )
+                    .schedule(desired)
+            }
+
+        assertSame(sentinel, thrown)
+        assertEquals(listOf(80_000L, 70_000L, 140_000L, 380_000L), calls)
+        assertEquals(listOf("GOAL_PLUS_1M"), anchorRecords().map { it.first() })
+    }
+
+    @Test
+    fun armedPlusOneApiReturnAllowsDelayedRestartToScheduleOnlyLaterFutureAnchors() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        assertFailsWith<IllegalStateException> {
+            coordinator(
+                    WakeAlarmClockPort { trigger, _ ->
+                        if (trigger == 380_000L) error("stop after plus one return")
+                    }
+                )
+                .schedule(desired)
+        }
+        assertEquals(listOf("ARMED"), anchorRecords().map { it[2] })
+        database.close()
+        database =
+            AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
+        val restartCalls = mutableListOf<Long>()
+
+        coordinator(WakeAlarmClockPort { trigger, _ -> restartCalls += trigger }, now = 140_001L)
+            .schedule(desired)
+
+        assertEquals(listOf(380_000L, 980_000L, 1_880_000L), restartCalls)
+        assertEquals(listOf("ARMED", "ARMED", "ARMED", "ARMED"), anchorRecords().map { it[2] })
+    }
+
+    @Test
+    fun consumedPlusOneUnderPreparingResumesAfterRestartWithOnlyFutureMissingAnchors() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val firstCalls = mutableListOf<Long>()
+        assertFailsWith<IllegalStateException> {
+            coordinator(
+                    WakeAlarmClockPort { trigger, _ ->
+                        firstCalls += trigger
+                        if (trigger == 380_000L) error("stop after plus one")
+                    }
+                )
+                .schedule(desired)
+        }
+        assertEquals(listOf(80_000L, 70_000L, 140_000L, 380_000L), firstCalls)
+
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        val kind = WakeRecoveryAnchorKind.GOAL_PLUS_1M
+        val identity = WakePendingIntentData.anchor(goal, kind)
+        val delivery = WakeRecoveryAnchorDelivery(goal, kind, 140_000L, identity, 140_000L)
+        assertEquals(
+            WakeRecoveryAnchorReceiptStoreOutcome.APPLIED,
+            RoomWakeRecoveryAnchorReceiptStore(database).claim(delivery).outcome,
+        )
+        val scheduleStore = RoomWakePrimaryScheduleStore(database)
+        scheduleStore.recordAnchorApiReturn(desired, goal, kind)
+        assertEquals("FIRED", anchorRecords().single().get(2))
+        val firedPlan = scheduleStore.prepareSchedule(desired, 140_001L)
+        assertEquals(emptyList(), firedPlan.primaryEvents)
+        assertEquals(
+            listOf(
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_15M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_30M,
+            ),
+            firedPlan.anchorKinds,
+        )
+        val source =
+            WakeDispatchAuthorizationFactory.canonicalSource(
+                goal,
+                WakeDispatchSourceKind.GOAL_PLUS_1M,
+                identity,
+                delivery.receivedAtEpochMillis,
+            )
+        assertEquals(
+            WakeRecoveryAnchorProcessingOutcome.DEFERRED_DURABLE,
+            RoomWakeRecoveryAnchorProcessingStore(database)
+                .processFired(delivery, source, maxHeartbeatAgeMillis = 500L)
+                .outcome,
+        )
+        assertEquals("CONSUMED", anchorRecords().single().get(2))
+        scheduleStore.recordAnchorApiReturn(desired, goal, kind)
+        assertEquals("CONSUMED", anchorRecords().single().get(2))
+        assertEquals("DEFERRED", goalDispatchState())
+        database.close()
+        database =
+            AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
+        val restartCalls = mutableListOf<Long>()
+
+        coordinator(WakeAlarmClockPort { trigger, _ -> restartCalls += trigger }, now = 140_001L)
+            .schedule(desired)
+
+        assertEquals(listOf(380_000L, 980_000L, 1_880_000L), restartCalls)
+        assertEquals(
+            listOf("CONSUMED", "ARMED", "ARMED", "ARMED"),
+            anchorRecords().map { it[2] },
+        )
+        assertEquals("DEFERRED", goalDispatchState())
+    }
+
+    @Test
+    fun progressedPrefixStillFailsClosedWhenAPastAnchorHasNoApiReturnRow() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        assertFailsWith<IllegalStateException> {
+            coordinator(
+                    WakeAlarmClockPort { trigger, _ ->
+                        if (trigger == 380_000L) error("leave plus five unrecorded")
+                    }
+                )
+                .schedule(desired)
+        }
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        val kind = WakeRecoveryAnchorKind.GOAL_PLUS_1M
+        val identity = WakePendingIntentData.anchor(goal, kind)
+        val delivery = WakeRecoveryAnchorDelivery(goal, kind, 140_000L, identity, 140_000L)
+        assertEquals(
+            WakeRecoveryAnchorReceiptStoreOutcome.APPLIED,
+            RoomWakeRecoveryAnchorReceiptStore(database).claim(delivery).outcome,
+        )
+        val before = wholeDatabaseFingerprint()
+        val calls = mutableListOf<Long>()
+
+        assertFailsWith<IllegalStateException> {
+            coordinator(WakeAlarmClockPort { trigger, _ -> calls += trigger }, now = 380_001L)
+                .schedule(desired)
+        }
+
+        assertEquals(emptyList(), calls)
+        assertEquals(before, wholeDatabaseFingerprint())
+        assertEquals(listOf("FIRED"), anchorRecords().map { it[2] })
+    }
+
+    @Test
+    fun anchorMarkerWriteFaultRollsBackOnlyThatMarkerAndRestartReissuesAllFutureAnchors() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val sentinel = IllegalStateException("five-minute marker sentinel")
+        val calls = mutableListOf<Long>()
+        val store =
+            primaryScheduleStoreWithFaultHook(database) { point ->
+                if (point == "AFTER_GOAL_PLUS_5M_API_RETURN_RECORD") throw sentinel
+            }
+
+        val thrown =
+            assertFailsWith<IllegalStateException> {
+                primaryWakeScheduleCoordinatorWithClock(
+                        context,
+                        WakeAlarmClockPort { trigger, _ -> calls += trigger },
+                        store,
+                    ) {
+                        60_000L
+                    }
+                    .schedule(desired)
+            }
+
+        assertSame(sentinel, thrown)
+        assertEquals(listOf(80_000L, 70_000L, 140_000L, 380_000L), calls)
+        assertEquals(listOf("GOAL_PLUS_1M"), anchorRecords().map { it.first() })
+        database.close()
+        database =
+            AlarmDatabase.databaseBuilder(context, databaseName).allowMainThreadQueries().build()
+        val restartCalls = mutableListOf<Long>()
+
+        coordinator(WakeAlarmClockPort { trigger, _ -> restartCalls += trigger }).schedule(desired)
+
+        assertEquals(allTriggerTimes(), restartCalls)
+        assertEquals(4, anchorRecords().size)
+    }
+
+    @Test
+    fun finalAnchorClockRunsAfterPreflightAndPendingIntentCreationThenRejectsExpiredCall() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        val times = ArrayDeque(listOf(60_000L, 60_000L, 60_000L, 140_000L))
+        val calls = mutableListOf<Long>()
+        val coordinator =
+            primaryWakeScheduleCoordinatorWithClock(
+                context,
+                WakeAlarmClockPort { trigger, _ -> calls += trigger },
+                RoomWakePrimaryScheduleStore(database),
+            ) {
+                val now = times.removeFirst()
+                if (now == 140_000L) {
+                    assertNotNull(
+                        WakePendingIntentFactory.lookupAnchor(
+                            context,
+                            goal,
+                            WakeRecoveryAnchorKind.GOAL_PLUS_1M,
+                        )
+                    )
+                }
+                now
+            }
+
+        assertFailsWith<IllegalStateException> { coordinator.schedule(desired) }
+
+        assertEquals(listOf(80_000L, 70_000L), calls)
+        assertEquals(emptyList(), anchorRecords())
+        assertEquals("GOAL=1|START=1", primaryMarkers())
+    }
+
+    @Test
+    fun authorityChangedAfterFirstAnchorRecordIsFencedBeforeNextPendingIntentCreation() {
+        val desired = snapshot()
+        RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        val calls = mutableListOf<Long>()
+        val store =
+            primaryScheduleStoreWithFaultHook(database) { point ->
+                if (point == "AFTER_GOAL_PLUS_1M_API_RETURN_RECORD") {
+                    database.openHelper.writableDatabase.execSQL(
+                        "UPDATE migration_state SET schedule_owner='WAKE' WHERE id=1"
+                    )
+                }
+            }
+
+        assertFailsWith<IllegalStateException> {
+            primaryWakeScheduleCoordinatorWithClock(
+                    context,
+                    WakeAlarmClockPort { trigger, _ -> calls += trigger },
+                    store,
+                ) {
+                    60_000L
+                }
+                .schedule(desired)
+        }
+
+        assertEquals(listOf(80_000L, 70_000L, 140_000L), calls)
+        assertEquals(listOf("GOAL_PLUS_1M"), anchorRecords().map { it.first() })
+        assertNull(
+            WakePendingIntentFactory.lookupAnchor(
+                context,
+                goal,
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+            )
+        )
+    }
+
+    @Test
     fun startApiFailureKeepsGoalReturnRecordAndRestartReissuesGoalBeforeStart() {
         val desired = snapshot()
         RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
@@ -209,7 +557,7 @@ class PrimaryWakeScheduleCoordinatorTest {
 
         coordinator(WakeAlarmClockPort { trigger, _ -> restartCalls += trigger }).schedule(desired)
 
-        assertEquals(listOf(80_000L, 70_000L), restartCalls)
+        assertEquals(allTriggerTimes(), restartCalls)
         assertEquals("GOAL=1|START=1", primaryMarkers())
         assertEquals("PREPARING_WAKE|1", ownerAndGeneration())
     }
@@ -223,7 +571,7 @@ class PrimaryWakeScheduleCoordinatorTest {
 
         coordinator(WakeAlarmClockPort { trigger, _ -> rerunCalls += trigger }).schedule(desired)
 
-        assertEquals(listOf(80_000L, 70_000L), rerunCalls)
+        assertEquals(allTriggerTimes(), rerunCalls)
         assertEquals("GOAL=1|START=1", primaryMarkers())
     }
 
@@ -274,7 +622,7 @@ class PrimaryWakeScheduleCoordinatorTest {
     }
 
     @Test
-    fun androidPortRegistersBothCanonicalPrimaryAlarmClockEntries() {
+    fun androidPortRegistersCanonicalPrimariesAndAllFourImmutableAnchorAlarmClockEntries() {
         val desired = snapshot()
         RoomWakeSchedulePreparationStore(database).prepare(desired, 900L)
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
@@ -282,9 +630,12 @@ class PrimaryWakeScheduleCoordinatorTest {
         coordinator(AndroidWakeAlarmClockPort(alarmManager)).schedule(desired)
 
         val scheduled = shadowOf(alarmManager).scheduledAlarms.filter { it.alarmClockInfo != null }
-        assertEquals(listOf(70_000L, 80_000L), scheduled.map { it.triggerAtTime }.sorted())
+        assertEquals(allTriggerTimes().sorted(), scheduled.map { it.triggerAtTime }.sorted())
         val identities = scheduled.associate {
             it.triggerAtTime to shadowOf(it.operation).savedIntent.dataString
+        }
+        val receiverClasses = scheduled.associate {
+            it.triggerAtTime to shadowOf(it.operation).savedIntent.component?.className
         }
         assertEquals(
             WakePendingIntentData.primary(
@@ -298,6 +649,21 @@ class PrimaryWakeScheduleCoordinatorTest {
             ),
             identities.getValue(80_000L),
         )
+        val goal = WakeEventIdentity(desired.id, WakeEventKind.GOAL, desired.goalEpochMs)
+        listOf(
+                WakeRecoveryAnchorKind.GOAL_PLUS_1M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_15M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_30M,
+            )
+            .forEach { kind ->
+                val trigger = checkNotNull(kind.triggerForGoalOrNull(desired.goalEpochMs))
+                assertEquals(
+                    WakePendingIntentData.anchor(goal, kind),
+                    identities.getValue(trigger),
+                )
+                assertEquals(WakeGoalReceiver::class.java.name, receiverClasses.getValue(trigger))
+            }
         scheduled.forEach {
             assertEquals(it.triggerAtTime, assertNotNull(it.alarmClockInfo).triggerTime)
         }
@@ -409,11 +775,11 @@ class PrimaryWakeScheduleCoordinatorTest {
             coordinator(WakeAlarmClockPort { trigger, _ -> restartCalls += trigger })
                 .schedule(desired)
 
-            assertEquals(listOf(80_000L, 70_000L), restartCalls, faultPoint)
+            assertEquals(allTriggerTimes(), restartCalls, faultPoint)
             assertEquals("GOAL=1|START=1", primaryMarkers(), faultPoint)
             assertEquals("PREPARING_WAKE|1", ownerAndGeneration(), faultPoint)
             assertEquals(2L, dispatchCount(), faultPoint)
-            assertEquals(0L, scalarLong("SELECT COUNT(*) FROM wake_recovery_anchor"), faultPoint)
+            assertEquals(4L, scalarLong("SELECT COUNT(*) FROM wake_recovery_anchor"), faultPoint)
             assertEquals(0L, scalarLong("SELECT COUNT(*) FROM schedule_outbox"), faultPoint)
         }
     }
@@ -447,7 +813,7 @@ class PrimaryWakeScheduleCoordinatorTest {
 
         coordinator(WakeAlarmClockPort { trigger, _ -> normalCalls += trigger }).schedule(selected)
 
-        assertEquals(listOf(80_000L, 70_000L), normalCalls)
+        assertEquals(allTriggerTimes(), normalCalls)
         assertEquals("GOAL=1|START=1", primaryMarkers())
 
         val corruptions =
@@ -543,6 +909,9 @@ class PrimaryWakeScheduleCoordinatorTest {
         }
     }
 
+    private fun allTriggerTimes() =
+        listOf(80_000L, 70_000L, 140_000L, 380_000L, 980_000L, 1_880_000L)
+
     private fun coordinator(port: WakeAlarmClockPort, now: Long = 60_000L) =
         primaryWakeScheduleCoordinatorWithClock(
             context,
@@ -607,6 +976,20 @@ class PrimaryWakeScheduleCoordinatorTest {
                     .joinToString("|")
             }
 
+    private fun anchorRecords(): List<List<String>> =
+        database.openHelper.readableDatabase
+            .query(
+                "SELECT anchor_kind,trigger_epoch_ms,state,pending_intent_identity " +
+                    "FROM wake_recovery_anchor ORDER BY trigger_epoch_ms"
+            )
+            .use { cursor ->
+                buildList {
+                    while (cursor.moveToNext()) {
+                        add((0 until cursor.columnCount).map(cursor::getString))
+                    }
+                }
+            }
+
     private fun ownerAndGeneration(): String =
         database.openHelper.readableDatabase
             .query(
@@ -623,6 +1006,14 @@ class PrimaryWakeScheduleCoordinatorTest {
             .use { cursor ->
                 check(cursor.moveToFirst())
                 cursor.getLong(0)
+            }
+
+    private fun goalDispatchState(): String =
+        database.openHelper.readableDatabase
+            .query("SELECT state FROM wake_event_dispatch WHERE event_kind='GOAL'")
+            .use { cursor ->
+                check(cursor.moveToFirst())
+                cursor.getString(0)
             }
 
     private fun scalarLong(sql: String): Long =

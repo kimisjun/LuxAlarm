@@ -12,6 +12,19 @@ import org.junit.Test
 
 class WakeRecoveryAnchorProtocolTest {
     @Test
+    fun canonicalImmutableAnchorKindsExcludePrimaryAndPreserveOffsetOrder() {
+        assertEquals(
+            listOf(
+                WakeRecoveryAnchorKind.GOAL_PLUS_1M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_5M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_15M,
+                WakeRecoveryAnchorKind.GOAL_PLUS_30M,
+            ),
+            CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS,
+        )
+    }
+
+    @Test
     fun everyV6AnchorKindMapsToItsExactGoalRelativeTrigger() {
         val goal = 10_000_000L
         val expected =

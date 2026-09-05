@@ -9,6 +9,7 @@ import com.dsalmun.luxalarm.data.RoomWakePrimaryScheduleStore
 import com.dsalmun.luxalarm.data.WakeRunSnapshotEntity
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
 
 /** Schedules the GOAL safety dependency before START and records only returned API calls. */
 internal class PrimaryWakeScheduleCoordinator
@@ -26,17 +27,20 @@ private constructor(
 
     fun schedule(snapshot: WakeRunSnapshotEntity) {
         val goal = WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs)
-        val start = WakeEventIdentity(snapshot.id, WakeEventKind.START, snapshot.wakeStartEpochMs)
         val initialNow = epochClock()
-        check(goal.expectedTriggerEpochMillis > initialNow) {
-            "GOAL primary trigger is not strictly in the future"
+        val plan = store.prepareSchedule(snapshot, initialNow)
+        val anchors =
+            plan.anchorKinds.map { kind ->
+                val trigger =
+                    checkNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis)) {
+                        "Immutable anchor trigger overflows epoch range"
+                    }
+                kind to trigger
+            }
+        plan.primaryEvents.forEach { scheduleAndRecord(snapshot, it) }
+        anchors.forEach { (kind, trigger) ->
+            scheduleAnchorAndRecord(snapshot, goal, kind, trigger)
         }
-        check(start.expectedTriggerEpochMillis > initialNow) {
-            "START primary trigger is not strictly in the future"
-        }
-        store.ensureDesiredPrimaries(snapshot)
-        scheduleAndRecord(snapshot, goal)
-        scheduleAndRecord(snapshot, start)
     }
 
     private fun scheduleAndRecord(snapshot: WakeRunSnapshotEntity, event: WakeEventIdentity) {
@@ -48,5 +52,19 @@ private constructor(
         }
         alarmClockPort.schedule(event.expectedTriggerEpochMillis, operation)
         store.recordApiReturn(snapshot, event)
+    }
+
+    private fun scheduleAnchorAndRecord(
+        snapshot: WakeRunSnapshotEntity,
+        goal: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+        trigger: Long,
+    ) {
+        store.preflightAnchorApiCall(snapshot, goal, kind)
+        val operation = WakePendingIntentFactory.createAnchor(context, goal, kind)
+        val finalNow = epochClock()
+        check(trigger > finalNow) { "Immutable anchor trigger is not strictly in the future" }
+        alarmClockPort.schedule(trigger, operation)
+        store.recordAnchorApiReturn(snapshot, goal, kind)
     }
 }

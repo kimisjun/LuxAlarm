@@ -4,16 +4,34 @@
  */
 package com.dsalmun.luxalarm.data
 
+import com.dsalmun.luxalarm.wake.CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS
 import com.dsalmun.luxalarm.wake.WakeEventIdentity
 import com.dsalmun.luxalarm.wake.WakeEventKind
+import com.dsalmun.luxalarm.wake.WakePendingIntentData
+import com.dsalmun.luxalarm.wake.WakeRecoveryAnchorKind
+
+internal data class WakePrimarySchedulePlan(
+    val primaryEvents: List<WakeEventIdentity>,
+    val anchorKinds: List<WakeRecoveryAnchorKind>,
+)
+
+private data class CanonicalAnchorProgress(
+    val hasAnyApiReturn: Boolean,
+    val hasProgressedState: Boolean,
+)
 
 /**
- * Durable successful-API-return records for the two primary wake alarms.
+ * Durable successful-API-return records for primary wake alarms and immutable GOAL anchors.
  *
- * `expected_trigger_epoch_ms` remains immutable desired time. `armed_primary=1` means only that
- * AlarmManager returned for that exact desired trigger; it does not assert current OS registration.
- * Zero means no successful return is durably known. Reconciliation therefore safely reissues a
- * future desired primary even when its marker is already one.
+ * `expected_trigger_epoch_ms` remains immutable primary desired time. `armed_primary=1` means only
+ * that AlarmManager returned for that exact desired trigger; it does not assert current OS
+ * registration. Zero means no successful return is durably known. Reconciliation therefore safely
+ * reissues a future desired primary even when its marker is already one.
+ *
+ * An immutable-anchor row exists only after its exact canonical AlarmManager call returns. Its
+ * `ARMED` state is that durable API-return marker and likewise does not claim the token is
+ * currently registered with the OS; PendingIntent existence alone is never recorded as scheduling
+ * success.
  */
 internal class RoomWakePrimaryScheduleStore
 private constructor(
@@ -21,6 +39,73 @@ private constructor(
     private val faultHook: (String) -> Unit,
 ) {
     internal constructor(database: AlarmDatabase) : this(database, {})
+
+    /**
+     * Decides from durable API-return evidence which strictly-future calls remain safe to issue.
+     */
+    fun prepareSchedule(
+        snapshot: WakeRunSnapshotEntity,
+        nowEpochMillis: Long,
+    ): WakePrimarySchedulePlan {
+        require(nowEpochMillis >= 0L) { "Current epoch must not be negative" }
+        return database.runInTransaction<WakePrimarySchedulePlan> {
+            requirePreparingAggregate(snapshot)
+            val dao = database.wakePrimaryScheduleDao()
+            var current = dao.dispatches(snapshot.id)
+            if (current.isEmpty()) {
+                dao.insertDispatches(canonicalDispatches(snapshot, armedStart = 0, armedGoal = 0))
+                faultHook("AFTER_PRIMARY_DISPATCH_INSERT")
+                current = dao.dispatches(snapshot.id)
+            }
+            val anchorProgress = requireCanonicalPrimaryRows(dao, snapshot, current)
+            val primaries =
+                listOf(
+                    WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs),
+                    WakeEventIdentity(snapshot.id, WakeEventKind.START, snapshot.wakeStartEpochMs),
+                )
+            val goal = primaries.first()
+            val anchorTriggers =
+                CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.associateWith { kind ->
+                    checkNotNull(kind.triggerForGoalOrNull(goal.expectedTriggerEpochMillis)) {
+                        "Immutable anchor trigger overflows epoch range"
+                    }
+                }
+            if (!anchorProgress.hasAnyApiReturn) {
+                check(primaries.all { it.expectedTriggerEpochMillis > nowEpochMillis }) {
+                    "Primary trigger is not strictly in the future"
+                }
+                check(anchorTriggers.values.all { it > nowEpochMillis }) {
+                    "Immutable anchor trigger is not strictly in the future"
+                }
+            } else {
+                primaries
+                    .filter { it.expectedTriggerEpochMillis <= nowEpochMillis }
+                    .forEach { event ->
+                        check(
+                            current.single { it.eventKey == event.canonicalKey() }.armedPrimary == 1
+                        ) {
+                            "Expired primary lacks durable API-return evidence"
+                        }
+                    }
+                val anchorsByKind = dao.anchors(goal.canonicalKey()).associateBy { it.anchorKind }
+                anchorTriggers
+                    .filterValues { it <= nowEpochMillis }
+                    .keys
+                    .forEach { kind ->
+                        check(anchorsByKind.containsKey(kind.name)) {
+                            "Expired immutable anchor lacks durable API-return evidence"
+                        }
+                    }
+            }
+            WakePrimarySchedulePlan(
+                primaryEvents = primaries.filter { it.expectedTriggerEpochMillis > nowEpochMillis },
+                anchorKinds =
+                    CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.filter {
+                        anchorTriggers.getValue(it) > nowEpochMillis
+                    },
+            )
+        }
+    }
 
     fun ensureDesiredPrimaries(snapshot: WakeRunSnapshotEntity) {
         database.runInTransaction {
@@ -74,6 +159,57 @@ private constructor(
                     "Primary API-return record lost its compare-and-set"
                 }
                 faultHook("AFTER_${event.kind.name}_PRIMARY_API_RETURN_RECORD")
+            }
+        }
+    }
+
+    /** Fences authority and requires both primary API returns before an immutable anchor call. */
+    fun preflightAnchorApiCall(
+        snapshot: WakeRunSnapshotEntity,
+        event: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+    ) {
+        requireAnchorRequest(snapshot, event, kind)
+        database.runInTransaction {
+            requirePreparingAggregate(snapshot)
+            val dao = database.wakePrimaryScheduleDao()
+            val current = dao.dispatches(snapshot.id)
+            requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(current.all { it.armedPrimary == 1 }) {
+                "Immutable anchors require successful GOAL and START primary API returns"
+            }
+        }
+    }
+
+    /** ARMED means this exact canonical anchor's AlarmManager call returned successfully. */
+    fun recordAnchorApiReturn(
+        snapshot: WakeRunSnapshotEntity,
+        event: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+    ) {
+        requireAnchorRequest(snapshot, event, kind)
+        database.runInTransaction {
+            requirePreparingAggregate(snapshot)
+            val dao = database.wakePrimaryScheduleDao()
+            val current = dao.dispatches(snapshot.id)
+            requireCanonicalPrimaryRows(dao, snapshot, current)
+            check(current.all { it.armedPrimary == 1 }) {
+                "Immutable anchors require successful GOAL and START primary API returns"
+            }
+            val desired = canonicalAnchor(event, kind)
+            if (dao.anchors(event.canonicalKey()).none { it.anchorKind == kind.name }) {
+                check(dao.insertAnchor(desired) != -1L) {
+                    "Anchor API-return record lost its insert"
+                }
+                faultHook("AFTER_${kind.name}_API_RETURN_RECORD")
+            }
+            check(
+                isCanonicalAnchor(
+                    dao.anchors(event.canonicalKey()).single { it.anchorKind == kind.name },
+                    desired,
+                )
+            ) {
+                "Anchor API-return record is noncanonical"
             }
         }
     }
@@ -132,7 +268,7 @@ private constructor(
         dao: WakePrimaryScheduleDao,
         snapshot: WakeRunSnapshotEntity,
         current: List<WakeEventDispatchEntity>,
-    ) {
+    ): CanonicalAnchorProgress {
         val armedByKind = current.associate { it.eventKind to it.armedPrimary }
         check(
             armedByKind.keys == setOf("START", "GOAL") &&
@@ -141,21 +277,96 @@ private constructor(
         ) {
             "Primary scheduling requires exactly canonical START and GOAL dispatch rows"
         }
-        check(
-            current ==
-                canonicalDispatches(
-                    snapshot,
-                    armedByKind.getValue("START"),
-                    armedByKind.getValue("GOAL"),
-                )
-        ) {
+        val anchorProgress = requireCanonicalAnchors(dao, snapshot, current)
+        val canonical =
+            canonicalDispatches(
+                snapshot,
+                armedByKind.getValue("START"),
+                armedByKind.getValue("GOAL"),
+            )
+        val goalState = current.single { it.eventKind == "GOAL" }.state
+        val accepted =
+            if (anchorProgress.hasProgressedState && goalState == "DEFERRED") {
+                canonical.map { if (it.eventKind == "GOAL") it.copy(state = "DEFERRED") else it }
+            } else {
+                canonical
+            }
+        check(current == accepted) {
             "Primary scheduling found noncanonical dispatch rows"
         }
         val eventKeys = current.map { it.eventKey }
-        check(dao.anchorCount(eventKeys) == 0L && dao.outboxCount(eventKeys) == 0L) {
-            "Primary scheduling found rows outside the Task 5.2B aggregate"
+        check(dao.outboxCount(eventKeys) == 0L) {
+            "Primary scheduling found unsupported outbox rows"
+        }
+        return anchorProgress
+    }
+
+    private fun requireCanonicalAnchors(
+        dao: WakePrimaryScheduleDao,
+        snapshot: WakeRunSnapshotEntity,
+        dispatches: List<WakeEventDispatchEntity>,
+    ): CanonicalAnchorProgress {
+        val goal = WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs)
+        val anchors = dao.anchors(goal.canonicalKey())
+        val desired = CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS.map {
+            canonicalAnchor(goal, it)
+        }
+        check(
+            anchors.size <= desired.size &&
+                anchors.zip(desired).all { (actual, expected) ->
+                    isCanonicalAnchor(actual, expected)
+                }
+        ) {
+            "Primary scheduling found noncanonical immutable anchor records"
+        }
+        check(
+            dispatches.none { it.eventKind == "START" && dao.anchors(it.eventKey).isNotEmpty() }
+        ) {
+            "Primary scheduling found immutable anchors outside GOAL"
+        }
+        if (anchors.isNotEmpty()) {
+            check(dispatches.all { it.armedPrimary == 1 }) {
+                "Immutable anchor records require both primary API returns"
+            }
+        }
+        return CanonicalAnchorProgress(
+            hasAnyApiReturn = anchors.isNotEmpty(),
+            hasProgressedState = anchors.any { it.state == "FIRED" || it.state == "CONSUMED" },
+        )
+    }
+
+    private fun isCanonicalAnchor(
+        actual: WakeRecoveryAnchorEntity,
+        armedCanonical: WakeRecoveryAnchorEntity,
+    ): Boolean =
+        actual.state in setOf("ARMED", "FIRED", "CONSUMED") &&
+            actual == armedCanonical.copy(state = actual.state)
+
+    private fun requireAnchorRequest(
+        snapshot: WakeRunSnapshotEntity,
+        event: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+    ) {
+        require(event == WakeEventIdentity(snapshot.id, WakeEventKind.GOAL, snapshot.goalEpochMs)) {
+            "Immutable recovery anchor must identify the snapshot GOAL"
+        }
+        require(kind in CANONICAL_IMMUTABLE_WAKE_RECOVERY_ANCHOR_KINDS) {
+            "GOAL_PRIMARY is not an immutable recovery anchor"
         }
     }
+
+    private fun canonicalAnchor(
+        event: WakeEventIdentity,
+        kind: WakeRecoveryAnchorKind,
+    ) =
+        WakeRecoveryAnchorEntity(
+            eventKey = event.canonicalKey(),
+            anchorKind = kind.name,
+            triggerEpochMs =
+                checkNotNull(kind.triggerForGoalOrNull(event.expectedTriggerEpochMillis)),
+            state = "ARMED",
+            pendingIntentIdentity = WakePendingIntentData.anchor(event, kind),
+        )
 
     private fun canonicalDispatches(
         snapshot: WakeRunSnapshotEntity,
