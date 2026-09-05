@@ -1,0 +1,35 @@
+<resources>
+    <string name="wake_home_title">고요한 아침</string>
+    <string name="wake_home_date_pattern">M월 d일 EEEE</string>
+    <string name="wake_home_time_pattern">a h:mm</string>
+    <string name="wake_home_next">다음 기상 · %1$s %2$s</string>
+    <string name="wake_home_no_next">다음 기상은 예약되지 않았어요</string>
+    <string name="wake_home_saved_date">저장된 설정 (예약 아님) · %1$s</string>
+    <string name="wake_home_goal">기상 목표 · %1$s</string>
+    <string name="wake_home_saved_goal">저장된 기상 목표 · %1$s</string>
+    <string name="wake_home_start">기상 시작 · %1$s</string>
+    <string name="wake_home_saved_start">저장된 기상 시작 · %1$s</string>
+    <plurals name="wake_home_preparation">
+        <item quantity="other">준비 시간 · %1$d분</item>
+    </plurals>
+    <plurals name="wake_home_saved_preparation">
+        <item quantity="other">저장된 준비 시간 · %1$d분</item>
+    </plurals>
+    <string name="wake_home_first_stage">첫 단계 · %1$s</string>
+    <string name="wake_home_saved_first_stage">저장된 첫 단계 · %1$s</string>
+    <string name="wake_home_preset">프리셋 · %1$s</string>
+    <string name="wake_home_saved_preset">저장된 프리셋 · %1$s</string>
+    <string name="wake_home_music">음악 · %1$s</string>
+    <string name="wake_home_saved_music">저장된 음악 · %1$s</string>
+    <string name="wake_home_routine_on">루틴 · 켜짐</string>
+    <string name="wake_home_routine_off">루틴 · 꺼짐</string>
+    <string name="wake_home_stage_light">빛</string>
+    <string name="wake_home_stage_music">음악</string>
+    <string name="wake_home_stage_vibration">진동</string>
+    <string name="wake_home_stage_none">없음</string>
+    <string name="wake_home_preset_very_gentle">아주 부드럽게</string>
+    <string name="wake_home_preset_balanced">균형 있게</string>
+    <string name="wake_home_preset_reliable">확실하게</string>
+    <string name="wake_home_preset_custom">사용자 설정</string>
+    <string name="wake_home_preview_song">새벽의 피아노</string>
+</resources>

@@ -1,4 +1,40 @@
 <resources>
-    <string name="app_name">GentleWake · 부드러운 기상</string>
-    <string name="gpl_modification_notice">GentleWake는 Lux Alarm 2.4.1을 기반으로 2026년에 수정된 GPLv3 소프트웨어입니다.</string>
+    <string name="app_name" translatable="false">GentleWake · 부드러운 기상</string>
+    <string name="gpl_modification_notice" translatable="false">GentleWake는 Lux Alarm 2.4.1을 기반으로 2026년에 수정된 GPLv3 소프트웨어입니다.</string>
+
+    <string name="wake_home_title">Quiet morning</string>
+    <string name="wake_home_date_pattern">EEEE, MMMM d</string>
+    <string name="wake_home_time_pattern">h:mm a</string>
+    <string name="wake_home_next">Next wake · %1$s %2$s</string>
+    <string name="wake_home_no_next">No next wake is scheduled</string>
+    <string name="wake_home_saved_date">Saved settings (not scheduled) · %1$s</string>
+    <string name="wake_home_goal">Wake goal · %1$s</string>
+    <string name="wake_home_saved_goal">Saved goal · %1$s</string>
+    <string name="wake_home_start">Wake start · %1$s</string>
+    <string name="wake_home_saved_start">Saved start · %1$s</string>
+    <plurals name="wake_home_preparation">
+        <item quantity="one">Preparation · %1$d minute</item>
+        <item quantity="other">Preparation · %1$d minutes</item>
+    </plurals>
+    <plurals name="wake_home_saved_preparation">
+        <item quantity="one">Saved preparation · %1$d minute</item>
+        <item quantity="other">Saved preparation · %1$d minutes</item>
+    </plurals>
+    <string name="wake_home_first_stage">First stage · %1$s</string>
+    <string name="wake_home_saved_first_stage">Saved first stage · %1$s</string>
+    <string name="wake_home_preset">Preset · %1$s</string>
+    <string name="wake_home_saved_preset">Saved preset · %1$s</string>
+    <string name="wake_home_music">Music · %1$s</string>
+    <string name="wake_home_saved_music">Saved music · %1$s</string>
+    <string name="wake_home_routine_on">Routine · On</string>
+    <string name="wake_home_routine_off">Routine · Off</string>
+    <string name="wake_home_stage_light">Light</string>
+    <string name="wake_home_stage_music">Music</string>
+    <string name="wake_home_stage_vibration">Vibration</string>
+    <string name="wake_home_stage_none">None</string>
+    <string name="wake_home_preset_very_gentle">Very gentle</string>
+    <string name="wake_home_preset_balanced">Balanced</string>
+    <string name="wake_home_preset_reliable">Reliable</string>
+    <string name="wake_home_preset_custom">Custom</string>
+    <string name="wake_home_preview_song">Dawn piano</string>
 </resources>

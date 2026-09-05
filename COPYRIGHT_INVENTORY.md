@@ -39,6 +39,7 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/main/java/com/dsalmun/luxalarm/AlarmService.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/main/java/com/dsalmun/luxalarm/GentleWakePreview.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/GentleWakePreviewPlayback.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/main/java/com/dsalmun/luxalarm/WakeHomeScreen.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/LuxAlarmApp.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/main/java/com/dsalmun/luxalarm/SettingsManager.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/main/java/com/dsalmun/luxalarm/SettingsScreen.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
@@ -86,6 +87,7 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/main/java/com/dsalmun/luxalarm/wake/WakePendingIntentData.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/java/com/dsalmun/luxalarm/wake/WakeDispatchAuthorization.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/main/res/values/strings.xml` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
+| `app/src/main/res/values-ko/strings.xml` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/AlarmActivityTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/test/java/com/dsalmun/luxalarm/AlarmReceiverTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/test/java/com/dsalmun/luxalarm/AlarmScreenLayoutTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
@@ -95,6 +97,7 @@ This inventory is derived from Git against Lux Alarm 2.4.1 base commit
 | `app/src/test/java/com/dsalmun/luxalarm/GentleWakePreviewPlaybackControllerTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/GentleWakePreviewTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/GentleWakeRingingScreenTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
+| `app/src/test/java/com/dsalmun/luxalarm/WakeHomeScreenTest.kt` | `A` | GentleWake new file; Copyright (C) 2026 김은준; GPL-3.0-or-later |
 | `app/src/test/java/com/dsalmun/luxalarm/LuxAlarmAppNavigationTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/test/java/com/dsalmun/luxalarm/SettingsManagerTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
 | `app/src/test/java/com/dsalmun/luxalarm/SettingsScreenContentTest.kt` | `M` | Inherited Lux Alarm file by Daniel Salmun; modified for GentleWake in 2026 by 김은준 |
