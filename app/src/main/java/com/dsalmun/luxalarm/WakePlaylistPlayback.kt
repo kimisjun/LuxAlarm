@@ -42,6 +42,8 @@ internal class WakePlaylistPlayback<Source>(
     private var activeToken: Any? = null
     private var started = false
     private var closed = false
+    private var drainingTransitions = false
+    private val pendingTransitions = ArrayDeque<Transition>()
 
     var state: WakePlaylistPlaybackState = WakePlaylistPlaybackState.Failed
         private set(value) {
@@ -53,7 +55,7 @@ internal class WakePlaylistPlayback<Source>(
         check(!started && !closed) { "Playlist playback can only be started once" }
         started = true
         gain = initialGain
-        state = playFrom(startIndex = 0)
+        enqueue(Transition.Advance(startIndex = 0, failedIndices = emptySet()))
         return state
     }
 
@@ -65,31 +67,83 @@ internal class WakePlaylistPlayback<Source>(
     fun close() {
         if (closed) return
         closed = true
-        activeToken = null
-        player?.let { activePlayer ->
-            runCatching { activePlayer.stop() }
-            runCatching { activePlayer.release() }
+        pendingTransitions.clear()
+        releaseActivePlayer(stopFirst = true)
+    }
+
+    /**
+     * Drains reentrant player events iteratively. An external callback starts a new drain, while
+     * callbacks raised inside that drain share one index-attempt budget and settle on fallback (or
+     * [WakePlaylistPlaybackState.Failed]) instead of wrapping recursively.
+     */
+    private fun enqueue(transition: Transition) {
+        if (closed) return
+        pendingTransitions.addLast(transition)
+        if (drainingTransitions) return
+
+        drainingTransitions = true
+        val attemptedIndices = mutableSetOf<Int>()
+        var settledState = state
+        try {
+            while (!closed) {
+                while (pendingTransitions.isNotEmpty() && !closed) {
+                    when (val next = pendingTransitions.removeFirst()) {
+                        is Transition.Advance -> {
+                            if (next.token != null && activeToken !== next.token) continue
+                            if (next.token != null) releaseActivePlayer()
+                            settledState =
+                                playFrom(
+                                    startIndex = next.startIndex,
+                                    failedIndices = next.failedIndices,
+                                    attemptedIndices = attemptedIndices,
+                                )
+                        }
+                        is Transition.Fail -> {
+                            if (activeToken !== next.token) continue
+                            releaseActivePlayer()
+                            settledState = WakePlaylistPlaybackState.Failed
+                        }
+                    }
+                }
+                if (closed) break
+                state = settledState
+                if (pendingTransitions.isEmpty()) break
+            }
+        } finally {
+            drainingTransitions = false
         }
-        player = null
     }
 
     private fun playFrom(
         startIndex: Int,
-        failedIndices: Set<Int> = emptySet(),
+        failedIndices: Set<Int>,
+        attemptedIndices: MutableSet<Int>,
     ): WakePlaylistPlaybackState {
-        var attemptedIndices = failedIndices
+        val unavailableIndices = failedIndices.toMutableSet()
         repeat(trackSources.size) { offset ->
             val index = (startIndex + offset) % trackSources.size
-            if (index in attemptedIndices) return@repeat
-            attemptedIndices = attemptedIndices + index
+            if (index in unavailableIndices || !attemptedIndices.add(index)) return@repeat
+            unavailableIndices += index
             val source = trackSources[index] ?: return@repeat
-            val failureHistory = attemptedIndices
+            val failureHistory = unavailableIndices.toSet()
             val activated =
                 activate(
                     source = source,
                     playingState = WakePlaylistPlaybackState.PlayingTrack(index),
-                    onCompletion = { playFrom(index + 1) },
-                    onError = { playFrom(index + 1, failureHistory) },
+                    onCompletion = {
+                        Transition.Advance(
+                            startIndex = index + 1,
+                            failedIndices = emptySet(),
+                            token = it,
+                        )
+                    },
+                    onError = {
+                        Transition.Advance(
+                            startIndex = index + 1,
+                            failedIndices = failureHistory,
+                            token = it,
+                        )
+                    },
                 ) ?: return@repeat
             return activated
         }
@@ -102,32 +156,20 @@ internal class WakePlaylistPlayback<Source>(
             source = source,
             playingState = WakePlaylistPlaybackState.PlayingFallback,
             onCompletion = null,
-            onError = { WakePlaylistPlaybackState.Failed },
+            onError = { Transition.Fail(it) },
         ) ?: WakePlaylistPlaybackState.Failed
     }
 
     private fun activate(
         source: Source,
         playingState: WakePlaylistPlaybackState,
-        onCompletion: (() -> WakePlaylistPlaybackState)?,
-        onError: () -> WakePlaylistPlaybackState,
+        onCompletion: ((Any) -> Transition)?,
+        onError: (Any) -> Transition,
     ): WakePlaylistPlaybackState? {
         val token = Any()
         var committed = false
         var consumed = false
         var pendingEvent: PlayerEvent? = null
-
-        fun transition(event: PlayerEvent): WakePlaylistPlaybackState {
-            if (activeToken === token) {
-                player?.release()
-                player = null
-                activeToken = null
-            }
-            return when (event) {
-                PlayerEvent.COMPLETION -> checkNotNull(onCompletion).invoke()
-                PlayerEvent.ERROR -> onError()
-            }
-        }
 
         fun signal(event: PlayerEvent) {
             if (event == PlayerEvent.COMPLETION && onCompletion == null) return
@@ -138,7 +180,12 @@ internal class WakePlaylistPlayback<Source>(
             }
             if (activeToken !== token) return
             consumed = true
-            state = transition(event)
+            enqueue(
+                when (event) {
+                    PlayerEvent.COMPLETION -> checkNotNull(onCompletion).invoke(token)
+                    PlayerEvent.ERROR -> onError(token)
+                }
+            )
         }
 
         val created =
@@ -155,9 +202,27 @@ internal class WakePlaylistPlayback<Source>(
         player = created
         committed = true
 
-        val deferredEvent = pendingEvent ?: return playingState
-        consumed = true
-        return transition(deferredEvent)
+        pendingEvent?.let { signal(it) }
+        return playingState
+    }
+
+    private fun releaseActivePlayer(stopFirst: Boolean = false) {
+        val activePlayer = player
+        player = null
+        activeToken = null
+        if (activePlayer == null) return
+        if (stopFirst) runCatching { activePlayer.stop() }
+        runCatching { activePlayer.release() }
+    }
+
+    private sealed interface Transition {
+        data class Advance(
+            val startIndex: Int,
+            val failedIndices: Set<Int>,
+            val token: Any? = null,
+        ) : Transition
+
+        data class Fail(val token: Any) : Transition
     }
 
     private enum class PlayerEvent {

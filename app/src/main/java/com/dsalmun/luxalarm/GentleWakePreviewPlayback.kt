@@ -303,6 +303,7 @@ internal fun GentleWakePreviewRoute(
                 playlistAudioUris = emptyList(),
                 defaultAlarmUri = defaultAlarmUri,
                 playerFactory = playerFactory,
+                statusOverride = stringResource(R.string.warmly_preview_fallback),
                 modifier = modifier,
             )
     }
@@ -339,6 +340,7 @@ internal fun GentleWakePreviewRoute(
     playlistAudioUris: List<Uri?>,
     defaultAlarmUri: Uri?,
     playerFactory: GentleWakePreviewPlayerFactory,
+    statusOverride: String? = null,
     modifier: Modifier = Modifier,
 ) {
     var playbackState by
@@ -368,7 +370,7 @@ internal fun GentleWakePreviewRoute(
             controller.close()
             onAwake()
         },
-        playbackStatus = playbackState.statusText(),
+        playbackStatus = statusOverride ?: playbackState.statusText(),
         modifier = modifier,
     )
 }

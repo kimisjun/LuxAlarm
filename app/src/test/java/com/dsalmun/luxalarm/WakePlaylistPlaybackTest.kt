@@ -111,6 +111,27 @@ class WakePlaylistPlaybackTest {
     }
 
     @Test
+    fun asynchronousCompletionsKeepWrappingAcrossIndependentTransitionDrains() {
+        val factory = RecordingFactory()
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first", "second"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+        playback.start(initialGain = 0.3f)
+
+        repeat(1_000) { factory.players.last().complete() }
+
+        assertEquals(1_001, factory.requests.size)
+        assertEquals(
+            List(1_001) { if (it % 2 == 0) "first" else "second" },
+            factory.requests.map { it.source },
+        )
+        assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 0), playback.state)
+    }
+
+    @Test
     fun synchronousErrorDuringCreationAdvancesToTheNextTrack() {
         val factory = RecordingFactory(synchronousErrorSources = setOf("first"))
         val playback =
@@ -142,6 +163,115 @@ class WakePlaylistPlaybackTest {
         assertEquals(listOf("first", "second"), factory.requests.map { it.source })
         assertEquals(1, factory.players.first().releaseCount)
         assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 1), state)
+    }
+
+    @Test
+    fun synchronousCompletionOfTheOnlyTrackSettlesOnFallbackWithoutRetryingTheTrack() {
+        val factory = RecordingFactory(synchronousCompletionSources = setOf("only"))
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("only"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(listOf("only", "default"), factory.requests.map { it.source })
+        assertEquals(1, factory.players.first().releaseCount)
+        assertEquals(WakePlaylistPlaybackState.PlayingFallback, state)
+    }
+
+    @Test
+    fun twoSynchronousCompletionsAdvanceToTheThirdTrackWithoutRecursion() {
+        val factory = RecordingFactory(synchronousCompletionSources = setOf("first", "second"))
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first", "second", "third"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(listOf("first", "second", "third"), factory.requests.map { it.source })
+        assertEquals(listOf(1, 1, 0), factory.players.map { it.releaseCount })
+        assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 2), state)
+    }
+
+    @Test
+    fun allSynchronousCompletionsAttemptEachTrackOnceThenSettleOnFallback() {
+        val sources = listOf("first", "second")
+        val factory = RecordingFactory(synchronousCompletionSources = sources.toSet())
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = sources,
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(listOf("first", "second", "default"), factory.requests.map { it.source })
+        assertEquals(listOf(1, 1, 0), factory.players.map { it.releaseCount })
+        assertEquals(WakePlaylistPlaybackState.PlayingFallback, state)
+    }
+
+    @Test
+    fun allSynchronousCompletionsSettleAsFailedWhenNoFallbackExists() {
+        val sources = listOf("first", "second")
+        val factory = RecordingFactory(synchronousCompletionSources = sources.toSet())
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = sources,
+                fallbackSource = null,
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(sources, factory.requests.map { it.source })
+        assertEquals(listOf(1, 1), factory.players.map { it.releaseCount })
+        assertEquals(WakePlaylistPlaybackState.Failed, state)
+    }
+
+    @Test
+    fun oneThousandSynchronousCompletionsDrainIterativelyAndAttemptEachTrackOnce() {
+        val sources = List(1_000) { "track-$it" }
+        val factory = RecordingFactory(synchronousCompletionSources = sources.toSet())
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = sources,
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(sources + "default", factory.requests.map { it.source })
+        assertEquals(List(1_000) { 1 } + 0, factory.players.map { it.releaseCount })
+        assertEquals(WakePlaylistPlaybackState.PlayingFallback, state)
+    }
+
+    @Test
+    fun synchronousCompletionsAndErrorsShareTheSameBoundedTransitionDrain() {
+        val factory =
+            RecordingFactory(
+                synchronousCompletionSources = setOf("first"),
+                synchronousErrorSources = setOf("second"),
+            )
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first", "second", "third"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+
+        val state = playback.start(initialGain = 0.3f)
+
+        assertEquals(listOf("first", "second", "third"), factory.requests.map { it.source })
+        assertEquals(listOf(1, 1, 0), factory.players.map { it.releaseCount })
+        assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 2), state)
     }
 
     @Test
@@ -180,6 +310,24 @@ class WakePlaylistPlaybackTest {
 
         assertEquals(1, factory.players.first().releaseCount)
         assertEquals(listOf("first", "second"), factory.requests.map { it.source })
+        assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 1), playback.state)
+    }
+
+    @Test
+    fun releaseFailureDuringCompletionDoesNotPreventAdvancement() {
+        val factory = RecordingFactory(releaseThrowingSources = setOf("first"))
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first", "second"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+        playback.start(initialGain = 0.3f)
+
+        factory.players.single().complete()
+
+        assertEquals(listOf("first", "second"), factory.requests.map { it.source })
+        assertEquals(1, factory.players.first().releaseCount)
         assertEquals(WakePlaylistPlaybackState.PlayingTrack(index = 1), playback.state)
     }
 
@@ -322,6 +470,25 @@ class WakePlaylistPlaybackTest {
     }
 
     @Test
+    fun fallbackRuntimeFailureReportsFailedEvenWhenReleaseThrows() {
+        val factory = RecordingFactory(releaseThrowingSources = setOf("default"))
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = emptyList(),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+        playback.start(initialGain = 0.4f)
+
+        factory.players.single().fail()
+        factory.players.single().complete()
+
+        assertEquals(listOf("default"), factory.requests.map { it.source })
+        assertEquals(1, factory.players.single().releaseCount)
+        assertEquals(WakePlaylistPlaybackState.Failed, playback.state)
+    }
+
+    @Test
     fun gainUpdatesOnlyTheActivePlayer() {
         val factory = RecordingFactory()
         val playback =
@@ -342,6 +509,28 @@ class WakePlaylistPlaybackTest {
     @Test
     fun closeStopsAndReleasesTheActivePlayerOnlyOnce() {
         val factory = RecordingFactory()
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first"),
+                fallbackSource = "default",
+                playerFactory = factory,
+            )
+        playback.start(initialGain = 0.1f)
+
+        playback.close()
+        playback.close()
+
+        assertEquals(1, factory.players.single().stopCount)
+        assertEquals(1, factory.players.single().releaseCount)
+    }
+
+    @Test
+    fun closeIsSettledEvenWhenStopAndReleaseBothThrow() {
+        val factory =
+            RecordingFactory(
+                stopThrowingSources = setOf("first"),
+                releaseThrowingSources = setOf("first"),
+            )
         val playback =
             WakePlaylistPlayback(
                 trackSources = listOf("first"),
@@ -381,6 +570,27 @@ class WakePlaylistPlaybackTest {
         )
     }
 
+    @Test
+    fun completionTriggeredByStateObserverIsDrainedBeforeReturning() {
+        val factory = RecordingFactory()
+        val playback =
+            WakePlaylistPlayback(
+                trackSources = listOf("first", "second"),
+                fallbackSource = "default",
+                playerFactory = factory,
+                onStateChange = { newState ->
+                    if (newState is WakePlaylistPlaybackState.PlayingTrack) {
+                        factory.players.last().complete()
+                    }
+                },
+            )
+
+        val state = playback.start(initialGain = 0.1f)
+
+        assertEquals(listOf("first", "second", "default"), factory.requests.map { it.source })
+        assertEquals(WakePlaylistPlaybackState.PlayingFallback, state)
+    }
+
     private data class Request(val source: String, val initialGain: Float)
 
     private class RecordingFactory(
@@ -388,6 +598,8 @@ class WakePlaylistPlaybackTest {
         private val throwingSources: Set<String> = emptySet(),
         private val synchronousErrorSources: Set<String> = emptySet(),
         private val synchronousCompletionSources: Set<String> = emptySet(),
+        private val stopThrowingSources: Set<String> = emptySet(),
+        private val releaseThrowingSources: Set<String> = emptySet(),
     ) : WakePlaylistPlayerFactory<String> {
         val requests = mutableListOf<Request>()
         val players = mutableListOf<RecordingPlayer>()
@@ -401,17 +613,25 @@ class WakePlaylistPlaybackTest {
             requests += Request(source, initialGain)
             if (source in throwingSources) error("creation failed")
             if (source in failingSources) return null
-            return RecordingPlayer(onCompletion, onError).also { player ->
-                players += player
-                if (source in synchronousErrorSources) onError()
-                if (source in synchronousCompletionSources) onCompletion()
-            }
+            return RecordingPlayer(
+                    onCompletion = onCompletion,
+                    onError = onError,
+                    throwsOnStop = source in stopThrowingSources,
+                    throwsOnRelease = source in releaseThrowingSources,
+                )
+                .also { player ->
+                    players += player
+                    if (source in synchronousErrorSources) onError()
+                    if (source in synchronousCompletionSources) onCompletion()
+                }
         }
     }
 
     private class RecordingPlayer(
         private val onCompletion: () -> Unit,
         private val onError: () -> Unit,
+        private val throwsOnStop: Boolean,
+        private val throwsOnRelease: Boolean,
     ) : WakePlaylistPlayer {
         val gainUpdates = mutableListOf<Float>()
         var stopCount = 0
@@ -427,10 +647,12 @@ class WakePlaylistPlaybackTest {
 
         override fun stop() {
             stopCount++
+            if (throwsOnStop) error("stop failed")
         }
 
         override fun release() {
             releaseCount++
+            if (throwsOnRelease) error("release failed")
         }
     }
 }

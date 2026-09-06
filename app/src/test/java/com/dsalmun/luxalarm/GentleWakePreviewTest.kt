@@ -311,6 +311,9 @@ class GentleWakePreviewTest {
         selection.completeExceptionally(IllegalStateException("database unavailable"))
         composeRule.waitForIdle()
 
+        composeRule
+            .onNodeWithText("Imported music failed · Playing default alarm sound")
+            .assertIsDisplayed()
         composeRule.runOnIdle { assertEquals(listOf(defaultUri), factory.requestedUris) }
     }
 
