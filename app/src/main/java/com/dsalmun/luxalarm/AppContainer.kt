@@ -9,6 +9,7 @@ import android.app.Application
 import androidx.annotation.VisibleForTesting
 import com.dsalmun.luxalarm.data.IAlarmRepository
 import com.dsalmun.luxalarm.data.RoomSleepPlanStore
+import com.dsalmun.luxalarm.data.RoomWakePlaylistStore
 import com.dsalmun.luxalarm.data.WarmlyDatabase
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +20,7 @@ class AppContainer : Application() {
         lateinit var repository: IAlarmRepository
         lateinit var settingsManager: SettingsManager
         lateinit var sleepPlanStore: SleepPlanStore
+        lateinit var wakePlaylistStore: WakePlaylistStore
 
         /** Backs the work the disabled legacy broadcast receivers use in focused tests. */
         @VisibleForTesting var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
@@ -27,6 +29,8 @@ class AppContainer : Application() {
     override fun onCreate() {
         super.onCreate()
         settingsManager = SettingsManager(this)
-        sleepPlanStore = RoomSleepPlanStore(WarmlyDatabase.getDatabase(this).sleepPlanDao())
+        val database = WarmlyDatabase.getDatabase(this)
+        sleepPlanStore = RoomSleepPlanStore(database.sleepPlanDao())
+        wakePlaylistStore = RoomWakePlaylistStore(database)
     }
 }

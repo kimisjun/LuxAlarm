@@ -15,6 +15,8 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import com.dsalmun.luxalarm.SleepPlan
 import com.dsalmun.luxalarm.SleepPlanStore
 
@@ -37,11 +39,109 @@ interface SleepPlanDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(plan: SleepPlanEntity)
 }
 
-@Database(entities = [SleepPlanEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities =
+        [
+            SleepPlanEntity::class,
+            WakePlaylistEntity::class,
+            WakeTrackEntity::class,
+            WakePlaylistEntryEntity::class,
+            WakePlaylistSelectionEntity::class,
+        ],
+    version = 2,
+    exportSchema = false,
+)
 abstract class WarmlyDatabase : RoomDatabase() {
     abstract fun sleepPlanDao(): SleepPlanDao
 
+    abstract fun wakePlaylistDao(): WakePlaylistDao
+
     companion object {
+        val MIGRATION_1_2 =
+            object : Migration(1, 2) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `wake_playlists` (
+                            `id` TEXT NOT NULL,
+                            `name` TEXT NOT NULL,
+                            PRIMARY KEY(`id`)
+                        )
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `wake_tracks` (
+                            `id` TEXT NOT NULL,
+                            `title` TEXT NOT NULL,
+                            `storedPath` TEXT NOT NULL,
+                            PRIMARY KEY(`id`)
+                        )
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `wake_playlist_entries` (
+                            `id` TEXT NOT NULL,
+                            `playlistId` TEXT NOT NULL,
+                            `trackId` TEXT NOT NULL,
+                            `position` INTEGER NOT NULL,
+                            PRIMARY KEY(`id`),
+                            FOREIGN KEY(`playlistId`) REFERENCES `wake_playlists`(`id`)
+                                ON UPDATE NO ACTION ON DELETE CASCADE,
+                            FOREIGN KEY(`trackId`) REFERENCES `wake_tracks`(`id`)
+                                ON UPDATE NO ACTION ON DELETE RESTRICT
+                        )
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS
+                            `index_wake_playlist_entries_playlistId_trackId`
+                        ON `wake_playlist_entries` (`playlistId`, `trackId`)
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS
+                            `index_wake_playlist_entries_playlistId_position`
+                        ON `wake_playlist_entries` (`playlistId`, `position`)
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE INDEX IF NOT EXISTS `index_wake_playlist_entries_trackId`
+                        ON `wake_playlist_entries` (`trackId`)
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `wake_playlist_selection` (
+                            `singletonId` INTEGER NOT NULL,
+                            `playlistId` TEXT NOT NULL,
+                            PRIMARY KEY(`singletonId`),
+                            FOREIGN KEY(`playlistId`) REFERENCES `wake_playlists`(`id`)
+                                ON UPDATE NO ACTION ON DELETE CASCADE
+                        )
+                        """
+                            .trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE INDEX IF NOT EXISTS `index_wake_playlist_selection_playlistId`
+                        ON `wake_playlist_selection` (`playlistId`)
+                        """
+                            .trimIndent()
+                    )
+                }
+            }
+
         @Volatile private var instance: WarmlyDatabase? = null
 
         fun getDatabase(context: Context): WarmlyDatabase =
@@ -53,6 +153,7 @@ abstract class WarmlyDatabase : RoomDatabase() {
                                 WarmlyDatabase::class.java,
                                 "warmly.db",
                             )
+                            .addMigrations(MIGRATION_1_2)
                             .build()
                             .also { instance = it }
                 }
