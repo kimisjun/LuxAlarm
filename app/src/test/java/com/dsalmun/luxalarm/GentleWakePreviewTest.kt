@@ -198,6 +198,47 @@ class GentleWakePreviewTest {
     }
 
     @Test
+    fun explicitEditorPlaylistBypassesSlowSelectionAndPreviewsItsOwnFirstTrack() {
+        val editor = WakePlaylist("editor", "Editor")
+        val editorUri = Uri.parse("file:///private/editor")
+        val store =
+            PreviewDeferredPlaylistStore(
+                CompletableDeferred(),
+                editor,
+                listOf(
+                    WakePlaylistEntry(
+                        "editor-entry",
+                        editor.id,
+                        WakeTrack("editor-track", "Editor track", editorUri.path!!),
+                        0,
+                    )
+                ),
+            )
+        val factory = PreviewRecordingFactory()
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    playlistId = editor.id,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
+                    playerFactory = factory,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertEquals(listOf(editorUri), factory.requestedUris)
+            assertEquals(0, store.selectionCalls)
+        }
+    }
+
+    @Test
     fun leavingBeforePlaylistResolutionNeverStartsPlayback() {
         val selected = WakePlaylist("selected", "Morning")
         val selection = CompletableDeferred<WakePlaylist?>()

@@ -126,6 +126,10 @@ class WakePlaylistViewModelTest {
             model.requestReplace("old-duplicate")
             model.completePicker(listOf("content://duplicate"))
             advanceUntilIdle()
+            assertEquals(
+                listOf("playlist-a" to "old", "playlist-a" to "old-duplicate"),
+                store.removeCalls,
+            )
 
             results =
                 listOf(
@@ -139,7 +143,85 @@ class WakePlaylistViewModelTest {
             model.completePicker(listOf("content://partial", "content://broken"))
             advanceUntilIdle()
 
-            assertEquals(listOf("playlist-a" to "old"), store.removeCalls)
+            assertEquals(
+                listOf("playlist-a" to "old", "playlist-a" to "old-duplicate"),
+                store.removeCalls,
+            )
+        }
+
+    @Test
+    fun replacementRetryFinishesAfterOldRemovalFailedWithoutAddingADuplicate() =
+        runTest(dispatcher) {
+            val store = RecordingPlaylistStore().apply { failNextRemove = true }
+            var importCalls = 0
+            val model =
+                viewModel(SavedStateHandle(), store) { _, _ ->
+                    importCalls++
+                    listOf(imported("replacement", added = importCalls == 1))
+                }
+            model.openEditor("playlist-a")
+            model.requestReplace("old")
+            model.completePicker(listOf("content://replacement"))
+            advanceUntilIdle()
+            assertEquals(PlaylistMutationError.IMPORT, model.state.value.error)
+
+            model.requestReplace("old")
+            model.completePicker(listOf("content://replacement"))
+            advanceUntilIdle()
+
+            assertEquals(2, importCalls)
+            assertEquals(
+                listOf("playlist-a" to "old", "playlist-a" to "old"),
+                store.removeCalls,
+            )
+            assertNull(model.state.value.error)
+        }
+
+    @Test
+    fun createCommitSurvivesRefreshFailureAndRetryDoesNotCreateAgain() =
+        runTest(dispatcher) {
+            val store = RecordingPlaylistStore()
+            val model = viewModel(SavedStateHandle(), store) { _, _ -> emptyList() }
+            advanceUntilIdle()
+            model.showCreateDialog()
+            model.updateNameDialog("Morning")
+            store.failListPlaylists = true
+
+            model.confirmNameDialog()
+            advanceUntilIdle()
+
+            assertNull(model.state.value.nameDialog)
+            assertEquals(PlaylistMutationError.REFRESH, model.state.value.error)
+            assertTrue(model.state.value.screen.playlists.any { it.name == "Morning" })
+            assertEquals(1, store.createCalls)
+
+            store.failListPlaylists = false
+            model.refresh()
+            advanceUntilIdle()
+            assertEquals(1, store.createCalls)
+            assertTrue(model.state.value.screen.playlists.any { it.name == "Morning" })
+        }
+
+    @Test
+    fun renameCommitSurvivesRefreshFailureWithCommittedNameVisible() =
+        runTest(dispatcher) {
+            val store = RecordingPlaylistStore()
+            val model = viewModel(SavedStateHandle(), store) { _, _ -> emptyList() }
+            advanceUntilIdle()
+            model.showRenameDialog("playlist-a")
+            model.updateNameDialog("Renamed")
+            store.failListPlaylists = true
+
+            model.confirmNameDialog()
+            advanceUntilIdle()
+
+            assertNull(model.state.value.nameDialog)
+            assertEquals(PlaylistMutationError.REFRESH, model.state.value.error)
+            assertEquals(
+                "Renamed",
+                model.state.value.screen.playlists.single { it.id == "playlist-a" }.name,
+            )
+            assertEquals(1, store.renameCalls)
         }
 
     @Test
@@ -173,6 +255,70 @@ class WakePlaylistViewModelTest {
         }
 
     @Test
+    fun selectionCommitIsNotReportedAsFailedWhenItsRefreshFails() =
+        runTest(dispatcher) {
+            val store = RecordingPlaylistStore()
+            val model = viewModel(SavedStateHandle(), store) { _, _ -> emptyList() }
+            advanceUntilIdle()
+            store.failListPlaylists = true
+
+            model.selectPlaylist("playlist-a")
+            advanceUntilIdle()
+
+            assertEquals("playlist-a", model.state.value.screen.selectedForWakeId)
+            assertEquals(PlaylistMutationError.REFRESH, model.state.value.error)
+        }
+
+    @Test
+    fun slowRefreshCannotOverwriteANewerPublishedRefresh() =
+        runTest(dispatcher) {
+            val store = RecordingPlaylistStore()
+            val model = viewModel(SavedStateHandle(), store) { _, _ -> emptyList() }
+            advanceUntilIdle()
+            val slow = store.enqueuePlaylistRefresh()
+            val fast = store.enqueuePlaylistRefresh()
+
+            model.refresh()
+            runCurrent()
+            model.refresh()
+            runCurrent()
+            fast.complete(listOf(WakePlaylist("new", "New")))
+            runCurrent()
+            assertEquals(listOf("New"), model.state.value.screen.playlists.map { it.name })
+
+            slow.complete(listOf(WakePlaylist("old", "Old")))
+            advanceUntilIdle()
+
+            assertEquals(listOf("New"), model.state.value.screen.playlists.map { it.name })
+        }
+
+    @Test
+    fun staleDisplayedEditorControlsCannotTargetANewEditorStillLoading() =
+        runTest(dispatcher) {
+            val trackA = WakeTrack("track-a", "A track", "/owned/a")
+            val store =
+                RecordingPlaylistStore(
+                    entries = listOf(WakePlaylistEntry("entry-a", "playlist-a", trackA, 0))
+                )
+            val model = viewModel(SavedStateHandle(), store) { _, _ -> emptyList() }
+            advanceUntilIdle()
+            model.openEditor("playlist-a")
+            advanceUntilIdle()
+            val loadingB = store.enqueuePlaylistRefresh()
+
+            model.openEditor("playlist-b")
+            runCurrent()
+            model.moveTrack("track-a", 0)
+            advanceUntilIdle()
+
+            assertEquals(emptyList(), store.moveCalls)
+            loadingB.complete(
+                listOf(WakePlaylist("playlist-a", "A"), WakePlaylist("playlist-b", "B"))
+            )
+            advanceUntilIdle()
+        }
+
+    @Test
     fun durableMutationsAreSerializedAndSelectionRefreshesCommittedSummary() =
         runTest(dispatcher) {
             val store = RecordingPlaylistStore()
@@ -183,6 +329,39 @@ class WakePlaylistViewModelTest {
 
             assertEquals(1, store.maxConcurrentMutations)
             assertEquals("playlist-b", model.state.value.screen.selectedForWakeId)
+        }
+
+    @Test
+    fun deleteCommitSurvivesRefreshFailureWithDeletedAudioShownMissing() =
+        runTest(dispatcher) {
+            val track = WakeTrack("track", "Song", "/owned/track")
+            val store =
+                RecordingPlaylistStore(
+                    entries = listOf(WakePlaylistEntry("entry", "playlist-a", track, 0))
+                )
+            var deleteCalls = 0
+            val model =
+                WakePlaylistViewModel(
+                    savedStateHandle = SavedStateHandle(mapOf("playlist.editorId" to "playlist-a")),
+                    playlistStore = store,
+                    importDocuments = { _, _ -> emptyList() },
+                    ownedFileExists = { true },
+                    deleteOwnedBytes = {
+                        deleteCalls++
+                        true
+                    },
+                )
+            advanceUntilIdle()
+            model.requestDeleteOwnedAudio("track")
+            store.failListPlaylists = true
+
+            model.confirmDeleteOwnedAudio()
+            advanceUntilIdle()
+
+            assertNull(model.state.value.deleteConfirmationTrackId)
+            assertEquals(PlaylistMutationError.REFRESH, model.state.value.error)
+            assertTrue(model.state.value.screen.editor!!.tracks.single().isMissing)
+            assertEquals(1, deleteCalls)
         }
 
     @Test
@@ -245,15 +424,25 @@ class WakePlaylistViewModelTest {
 private class RecordingPlaylistStore(private val entries: List<WakePlaylistEntry> = emptyList()) :
     WakePlaylistStore {
     val removeCalls = mutableListOf<Pair<String, String>>()
+    val moveCalls = mutableListOf<Triple<String, String, Int>>()
     var createGate: CompletableDeferred<Unit>? = null
     var failCreate = false
+    var failNextRemove = false
+    var failListPlaylists = false
+    var createCalls = 0
+    var renameCalls = 0
     var maxConcurrentMutations = 0
     private var concurrentMutations = 0
     private var selectedId: String? = null
     private val playlists =
         mutableListOf(WakePlaylist("playlist-a", "A"), WakePlaylist("playlist-b", "B"))
+    private val playlistRefreshes = ArrayDeque<CompletableDeferred<List<WakePlaylist>>>()
+
+    fun enqueuePlaylistRefresh(): CompletableDeferred<List<WakePlaylist>> =
+        CompletableDeferred<List<WakePlaylist>>().also(playlistRefreshes::addLast)
 
     override suspend fun createPlaylist(name: String): WakePlaylist {
+        createCalls++
         concurrentMutations += 1
         maxConcurrentMutations = maxOf(maxConcurrentMutations, concurrentMutations)
         try {
@@ -265,9 +454,20 @@ private class RecordingPlaylistStore(private val entries: List<WakePlaylistEntry
         }
     }
 
-    override suspend fun listPlaylists() = playlists.toList()
+    override suspend fun listPlaylists(): List<WakePlaylist> {
+        if (failListPlaylists) error("refresh failed")
+        return if (playlistRefreshes.isEmpty()) {
+            playlists.toList()
+        } else {
+            playlistRefreshes.removeFirst().await()
+        }
+    }
 
-    override suspend fun renamePlaylist(playlistId: String, name: String) = Unit
+    override suspend fun renamePlaylist(playlistId: String, name: String) {
+        renameCalls++
+        val index = playlists.indexOfFirst { it.id == playlistId }
+        playlists[index] = playlists[index].copy(name = name)
+    }
 
     override suspend fun selectPlaylistForWake(playlistId: String) {
         concurrentMutations += 1
@@ -296,9 +496,15 @@ private class RecordingPlaylistStore(private val entries: List<WakePlaylistEntry
 
     override suspend fun removeTrack(playlistId: String, trackId: String) {
         removeCalls += playlistId to trackId
+        if (failNextRemove) {
+            failNextRemove = false
+            error("remove failed")
+        }
     }
 
-    override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) = Unit
+    override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) {
+        moveCalls += Triple(playlistId, trackId, position)
+    }
 
     override suspend fun listEntries(playlistId: String): List<WakePlaylistEntry> = entries.filter {
         it.playlistId == playlistId

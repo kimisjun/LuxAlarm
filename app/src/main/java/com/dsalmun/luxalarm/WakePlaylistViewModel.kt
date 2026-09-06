@@ -8,6 +8,7 @@ package com.dsalmun.luxalarm
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,7 @@ enum class PlaylistMutationError {
     DELETE,
     IMPORT,
     LOAD,
+    REFRESH,
 }
 
 sealed interface PlaylistNameDialogState {
@@ -62,6 +64,7 @@ class WakePlaylistViewModel(
     private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
 ) : ViewModel() {
     private val mutationMutex = Mutex()
+    private var refreshGeneration = 0L
     private val _state =
         MutableStateFlow(
             WakePlaylistRouteState(
@@ -127,39 +130,99 @@ class WakePlaylistViewModel(
             else PlaylistMutationError.RENAME
         durable(failure) {
             when (dialog) {
-                is PlaylistNameDialogState.Create -> playlistStore.createPlaylist(name)
-                is PlaylistNameDialogState.Rename ->
+                is PlaylistNameDialogState.Create -> {
+                    val created = playlistStore.createPlaylist(name)
+                    setNameDialog(null)
+                    _state.value =
+                        _state.value.copy(
+                            screen =
+                                _state.value.screen.copy(
+                                    playlists =
+                                        (_state.value.screen.playlists +
+                                                WakePlaylistItemUi(created.id, created.name))
+                                            .distinctBy { it.id }
+                                )
+                        )
+                }
+                is PlaylistNameDialogState.Rename -> {
                     playlistStore.renamePlaylist(dialog.playlistId, name)
+                    val screen = _state.value.screen
+                    _state.value =
+                        _state.value.copy(
+                            screen =
+                                screen.copy(
+                                    playlists =
+                                        screen.playlists.map {
+                                            if (it.id == dialog.playlistId) it.copy(name = name)
+                                            else it
+                                        },
+                                    editor =
+                                        screen.editor?.let {
+                                            if (it.id == dialog.playlistId) it.copy(name = name)
+                                            else it
+                                        },
+                                )
+                        )
+                }
             }
             setNameDialog(null)
-            refreshNow()
+            refreshAfterCommit()
         }
     }
 
     fun selectPlaylist(playlistId: String) {
         durable(PlaylistMutationError.SELECT) {
             playlistStore.selectPlaylistForWake(playlistId)
-            refreshNow()
+            _state.value =
+                _state.value.copy(screen = _state.value.screen.copy(selectedForWakeId = playlistId))
+            refreshAfterCommit()
         }
     }
 
     fun moveTrack(trackId: String, position: Int) {
-        val playlistId = currentEditorId() ?: return
+        val playlistId = actionableEditorId() ?: return
         durable(PlaylistMutationError.MOVE) {
             playlistStore.moveTrack(playlistId, trackId, position)
-            refreshNow()
+            val editor = _state.value.screen.editor
+            if (editor?.id == playlistId) {
+                val tracks = editor.tracks.toMutableList()
+                val oldIndex = tracks.indexOfFirst { it.id == trackId }
+                if (oldIndex >= 0) {
+                    val moved = tracks.removeAt(oldIndex)
+                    tracks.add(position.coerceIn(0, tracks.size), moved)
+                    _state.value =
+                        _state.value.copy(
+                            screen = _state.value.screen.copy(editor = editor.copy(tracks = tracks))
+                        )
+                }
+            }
+            refreshAfterCommit()
         }
     }
 
     fun removeTrack(trackId: String) {
-        val playlistId = currentEditorId() ?: return
+        val playlistId = actionableEditorId() ?: return
         durable(PlaylistMutationError.REMOVE) {
             playlistStore.removeTrack(playlistId, trackId)
-            refreshNow()
+            val editor = _state.value.screen.editor
+            if (editor?.id == playlistId) {
+                _state.value =
+                    _state.value.copy(
+                        screen =
+                            _state.value.screen.copy(
+                                editor =
+                                    editor.copy(
+                                        tracks = editor.tracks.filterNot { it.id == trackId }
+                                    )
+                            )
+                    )
+            }
+            refreshAfterCommit()
         }
     }
 
     fun requestDeleteOwnedAudio(trackId: String) {
+        if (actionableEditorId() == null) return
         savedStateHandle[KEY_DELETE_TRACK_ID] = trackId
         _state.value = _state.value.copy(deleteConfirmationTrackId = trackId, error = null)
     }
@@ -179,21 +242,35 @@ class WakePlaylistViewModel(
                     ?: error("Track is no longer in the playlist")
             check(deleteOwnedBytes(track)) { "Owned audio could not be deleted" }
             savedStateHandle[KEY_DELETE_TRACK_ID] = null
-            _state.value = _state.value.copy(deleteConfirmationTrackId = null)
-            refreshNow()
+            val editor = _state.value.screen.editor
+            _state.value =
+                _state.value.copy(
+                    deleteConfirmationTrackId = null,
+                    screen =
+                        _state.value.screen.copy(
+                            editor =
+                                editor?.copy(
+                                    tracks =
+                                        editor.tracks.map {
+                                            if (it.id == trackId) it.copy(isMissing = true) else it
+                                        }
+                                )
+                        ),
+                )
+            refreshAfterCommit()
         }
     }
 
     fun requestImport() {
-        currentEditorId()?.let { savePending(PendingPickerOperation.Import(it)) }
+        actionableEditorId()?.let { savePending(PendingPickerOperation.Import(it)) }
     }
 
     fun requestFind(oldTrackId: String) {
-        currentEditorId()?.let { savePending(PendingPickerOperation.Find(it, oldTrackId)) }
+        actionableEditorId()?.let { savePending(PendingPickerOperation.Find(it, oldTrackId)) }
     }
 
     fun requestReplace(oldTrackId: String) {
-        currentEditorId()?.let { savePending(PendingPickerOperation.Replace(it, oldTrackId)) }
+        actionableEditorId()?.let { savePending(PendingPickerOperation.Replace(it, oldTrackId)) }
     }
 
     fun completePicker(documentUris: List<String>) {
@@ -211,7 +288,7 @@ class WakePlaylistViewModel(
                 _state.value.copy(
                     screen = _state.value.screen.copy(importSummary = results.toImportSummary())
                 )
-            refreshNow()
+            refreshAfterCommit()
         }
     }
 
@@ -230,21 +307,34 @@ class WakePlaylistViewModel(
         operation: PendingPickerOperation.Replace,
         results: List<WakePlaylistImportResult>,
     ) {
-        val replacementAdded = results.singleOrNull() as? WakePlaylistImportResult.Added ?: return
-        if (replacementAdded.ownedTrack.id != operation.oldTrackId) {
+        val replacementTrackId =
+            when (val replacement = results.singleOrNull()) {
+                is WakePlaylistImportResult.Added -> replacement.ownedTrack.id
+                is WakePlaylistImportResult.AlreadyInPlaylist -> replacement.ownedTrack.id
+                else -> return
+            }
+        if (replacementTrackId != operation.oldTrackId) {
             playlistStore.removeTrack(operation.playlistId, operation.oldTrackId)
         }
     }
 
     fun refresh() {
+        val request = beginRefresh()
         viewModelScope.launch {
-            runCatching { refreshNow() }
-                .onFailure { _state.value = _state.value.copy(error = PlaylistMutationError.LOAD) }
+            try {
+                refreshNow(request)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (isCurrent(request)) {
+                    _state.value = _state.value.copy(error = PlaylistMutationError.LOAD)
+                }
+            }
         }
     }
 
-    private suspend fun refreshNow() {
-        val editorId = currentEditorId()
+    private suspend fun refreshNow(request: RefreshRequest = beginRefresh()) {
+        val editorId = request.editorId
         val playlists = playlistStore.listPlaylists()
         val selected = playlistStore.selectedPlaylistForWake()
         val editorPlaylist = editorId?.let { id -> playlists.singleOrNull { it.id == id } }
@@ -265,6 +355,7 @@ class WakePlaylistViewModel(
                         },
             )
         }
+        if (!isCurrent(request)) return
         _state.value =
             _state.value.copy(
                 screen =
@@ -272,9 +363,31 @@ class WakePlaylistViewModel(
                         playlists = playlists.map { WakePlaylistItemUi(it.id, it.name) },
                         selectedForWakeId = selected?.id,
                         editor = editor,
-                    )
+                    ),
+                error = null,
             )
     }
+
+    private suspend fun refreshAfterCommit() {
+        val request = beginRefresh()
+        try {
+            refreshNow(request)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            if (isCurrent(request)) {
+                _state.value = _state.value.copy(error = PlaylistMutationError.REFRESH)
+            }
+        }
+    }
+
+    private fun beginRefresh(): RefreshRequest =
+        RefreshRequest(generation = ++refreshGeneration, editorId = currentEditorId())
+
+    private fun isCurrent(request: RefreshRequest): Boolean =
+        request.generation == refreshGeneration && request.editorId == currentEditorId()
+
+    private data class RefreshRequest(val generation: Long, val editorId: String?)
 
     private fun durable(error: PlaylistMutationError, block: suspend () -> Unit) {
         viewModelScope.launch {
@@ -282,6 +395,8 @@ class WakePlaylistViewModel(
                 _state.value = _state.value.copy(busy = true, error = null)
                 try {
                     block()
+                } catch (caught: CancellationException) {
+                    throw caught
                 } catch (_: Exception) {
                     _state.value = _state.value.copy(error = error)
                 } finally {
@@ -292,6 +407,12 @@ class WakePlaylistViewModel(
     }
 
     private fun currentEditorId(): String? = savedStateHandle[KEY_EDITOR_ID]
+
+    private fun actionableEditorId(): String? {
+        val current = currentEditorId() ?: return null
+        val displayed = _state.value.screen.editor?.id
+        return current.takeIf { displayed == null || displayed == current }
+    }
 
     private fun setNameDialog(dialog: PlaylistNameDialogState?) {
         savedStateHandle[KEY_DIALOG_KIND] =

@@ -27,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -79,8 +80,9 @@ fun WakePlaylistRoute(
     val model: WakePlaylistViewModel = viewModel(factory = factory)
     val routeState by model.state.collectAsStateWithLifecycle()
     val state = routeState.screen
-    var showPreview by remember { mutableStateOf(false) }
-    var previewProgress by remember { mutableFloatStateOf(0f) }
+    var showPreview by rememberSaveable { mutableStateOf(false) }
+    var previewPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var previewProgress by rememberSaveable { mutableFloatStateOf(0f) }
 
     val importPicker =
         rememberLauncherForActivityResult(WakeAudioDocumentsContract()) { uris ->
@@ -114,6 +116,7 @@ fun WakePlaylistRoute(
             onProgressChange = { previewProgress = it },
             onAwake = { showPreview = false },
             playlistStore = playlistStore,
+            playlistId = previewPlaylistId,
         )
         return
     }
@@ -158,7 +161,7 @@ fun WakePlaylistRoute(
                 }
             },
             onPreview = {
-                state.editor?.id?.let(model::selectPlaylist)
+                previewPlaylistId = state.editor?.id
                 previewProgress = 0f
                 showPreview = true
             },
@@ -326,6 +329,7 @@ internal fun List<WakePlaylistImportResult>.toImportSummary() =
 private fun PlaylistMutationError.messageResource(): Int =
     when (this) {
         PlaylistMutationError.DELETE -> R.string.warmly_playlist_delete_failed
-        PlaylistMutationError.LOAD -> R.string.warmly_playlist_load_failed
+        PlaylistMutationError.LOAD,
+        PlaylistMutationError.REFRESH -> R.string.warmly_playlist_load_failed
         else -> R.string.warmly_playlist_save_failed
     }

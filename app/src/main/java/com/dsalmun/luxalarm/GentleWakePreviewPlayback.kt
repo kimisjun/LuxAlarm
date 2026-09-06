@@ -218,6 +218,7 @@ internal fun GentleWakePreviewRoute(
     onProgressChange: (Float) -> Unit = {},
     onAwake: () -> Unit,
     playlistStore: WakePlaylistStore,
+    playlistId: String? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -230,6 +231,7 @@ internal fun GentleWakePreviewRoute(
         onProgressChange = onProgressChange,
         onAwake = onAwake,
         playlistStore = playlistStore,
+        playlistId = playlistId,
         legacyImportedPath = importedAudioPath,
         isLocalFile = { File(it).isFile },
         defaultAlarmUri = defaultAlarmUri,
@@ -245,6 +247,7 @@ internal fun GentleWakePreviewRoute(
     onProgressChange: (Float) -> Unit = {},
     onAwake: () -> Unit,
     playlistStore: WakePlaylistStore,
+    playlistId: String? = null,
     legacyImportedPath: String?,
     isLocalFile: (String) -> Boolean,
     defaultAlarmUri: Uri?,
@@ -252,14 +255,16 @@ internal fun GentleWakePreviewRoute(
     modifier: Modifier = Modifier,
 ) {
     var resolution by
-        remember(playlistStore, legacyImportedPath) {
+        remember(playlistStore, playlistId, legacyImportedPath) {
             mutableStateOf<PreviewAudioResolution>(PreviewAudioResolution.Loading)
         }
 
-    LaunchedEffect(playlistStore, legacyImportedPath) {
+    LaunchedEffect(playlistStore, playlistId, legacyImportedPath) {
         resolution =
             try {
-                val selected = playlistStore.selectedPlaylistForWake()
+                val selected =
+                    playlistId?.let { WakePlaylist(it, "") }
+                        ?: playlistStore.selectedPlaylistForWake()
                 val entries = selected?.let { playlistStore.listEntries(it.id) }.orEmpty()
                 val paths = previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
                 PreviewAudioResolution.Ready(

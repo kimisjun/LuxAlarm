@@ -8,7 +8,9 @@ package com.dsalmun.luxalarm
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -86,6 +88,29 @@ class WarmlyAppEntryTest {
         composeRule.onNodeWithText("Music").performClick()
 
         composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+    }
+
+    @Test
+    fun savedStateRestorationKeepsTheMusicRouteVisible() {
+        val restorationTester = StateRestorationTester(composeRule)
+        restorationTester.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                LuxAlarmApp(FakeSleepPlanStore(SleepPlan(7 * 60, 23 * 60, -1)))
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Music").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("Music").performClick()
+        composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+
+        restorationTester.emulateSavedInstanceStateRestore()
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText("Wake playlists").fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+        composeRule.onNodeWithText("Music").assertDoesNotExist()
     }
 
     @Test

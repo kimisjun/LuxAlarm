@@ -107,6 +107,38 @@ class WakePlaylistRouteTest {
     }
 
     @Test
+    fun editorPreviewDoesNotMutatePersistedSelectionBeforeOpening() {
+        val store =
+            FakeWakePlaylistStore(
+                initialPlaylists = listOf(WakePlaylist("morning", "Morning")),
+                initialEntries =
+                    listOf(
+                        WakePlaylistEntry(
+                            "entry",
+                            "morning",
+                            WakeTrack("track", "Birdsong", "/owned/birdsong"),
+                            0,
+                        )
+                    ),
+            )
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                WakePlaylistRoute(
+                    playlistStore = store,
+                    ownedFileExists = { true },
+                    usePlatformNameDialog = false,
+                )
+            }
+        }
+        composeRule.onNodeWithText("Edit").performClick()
+
+        composeRule.onNodeWithText("Preview wake").performClick()
+
+        composeRule.onNodeWithText("Time to wake gently").assertIsDisplayed()
+        assertEquals(0, store.selectCalls)
+    }
+
+    @Test
     fun importResultsAreSummarizedPerOutcome() {
         val track = WakeAudioStore.OwnedTrack("id", "id", "/owned/id")
         val entry = WakePlaylistEntry("entry", "playlist", WakeTrack("id", "Song", "/owned/id"), 0)
@@ -130,6 +162,9 @@ private class FakeWakePlaylistStore(
 ) : WakePlaylistStore {
     val moveCalls = mutableListOf<Pair<String, Int>>()
     val removeCalls = mutableListOf<String>()
+    var selectCalls = 0
+        private set
+
     private val playlists = initialPlaylists.toMutableList()
     private val entries =
         initialEntries
@@ -150,6 +185,7 @@ private class FakeWakePlaylistStore(
     }
 
     override suspend fun selectPlaylistForWake(playlistId: String) {
+        selectCalls++
         selectedId = playlistId
     }
 
