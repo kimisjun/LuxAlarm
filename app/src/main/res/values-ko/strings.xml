@@ -62,6 +62,12 @@
     <string name="warmly_playlist_remove_description">%1$s 재생목록에서 제거</string>
     <string name="warmly_playlist_delete_owned_audio">소유한 오디오 삭제</string>
     <string name="warmly_playlist_delete_description">소유한 오디오 %1$s 삭제</string>
+    <string name="warmly_playlist_delete_confirm_title">소유한 오디오를 삭제할까요?</string>
+    <string name="warmly_playlist_delete_confirm_body">플레이리스트 항목은 그대로 두고 앱이 보관한 오디오 사본만 삭제합니다.</string>
+    <string name="warmly_playlist_delete_confirm">삭제</string>
+    <string name="warmly_playlist_delete_failed">오디오를 삭제하지 못했어요. 다시 시도해 주세요.</string>
+    <string name="warmly_playlist_save_failed">플레이리스트 변경사항을 저장하지 못했어요. 다시 시도해 주세요.</string>
+    <string name="warmly_playlist_load_failed">플레이리스트를 불러오지 못했어요. 다시 시도해 주세요.</string>
     <string name="warmly_playlist_import_summary">가져오기 결과 · 추가: %1$d · 중복: %2$d · 미지원: %3$d · 실패: %4$d</string>
     <string name="warmly_playlist_import_songs">곡 가져오기</string>
     <string name="warmly_playlist_preview">기상 미리보기</string>

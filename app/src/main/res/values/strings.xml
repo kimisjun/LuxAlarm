@@ -62,6 +62,12 @@
     <string name="warmly_playlist_remove_description">Remove %1$s from playlist</string>
     <string name="warmly_playlist_delete_owned_audio">Delete owned audio</string>
     <string name="warmly_playlist_delete_description">Delete owned audio %1$s</string>
+    <string name="warmly_playlist_delete_confirm_title">Delete owned audio?</string>
+    <string name="warmly_playlist_delete_confirm_body">The playlist entry stays visible, but the app-owned audio copy will be removed.</string>
+    <string name="warmly_playlist_delete_confirm">Delete</string>
+    <string name="warmly_playlist_delete_failed">The owned audio could not be deleted. Try again.</string>
+    <string name="warmly_playlist_save_failed">The playlist change could not be saved. Try again.</string>
+    <string name="warmly_playlist_load_failed">Playlists could not be loaded. Try again.</string>
     <string name="warmly_playlist_import_summary">Import results · Added: %1$d · Duplicates: %2$d · Unsupported: %3$d · Failed: %4$d</string>
     <string name="warmly_playlist_import_songs">Import songs</string>
     <string name="warmly_playlist_preview">Preview wake</string>

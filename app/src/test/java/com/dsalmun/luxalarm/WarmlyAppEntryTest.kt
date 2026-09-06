@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
+import kotlinx.coroutines.runBlocking
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -85,6 +86,27 @@ class WarmlyAppEntryTest {
         composeRule.onNodeWithText("Music").performClick()
 
         composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+    }
+
+    @Test
+    fun returningFromMusicReloadsTheCommittedSelection() {
+        val store =
+            FakeAppWakePlaylistStore(
+                playlists =
+                    listOf(
+                        WakePlaylist("morning", "Morning calm"),
+                        WakePlaylist("rain", "Rain"),
+                    ),
+                selectedId = "morning",
+            )
+        setContent(FakeSleepPlanStore(SleepPlan(7 * 60, 23 * 60, -1)), store)
+        composeRule.onNodeWithText("Music").performClick()
+        composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+
+        runBlocking { store.selectPlaylistForWake("rain") }
+        composeRule.onNodeWithText("Back").performClick()
+
+        composeRule.onNodeWithText("Wake music · Rain").assertIsDisplayed()
     }
 
     @Test

@@ -7,7 +7,7 @@ package com.dsalmun.luxalarm
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,8 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -255,7 +257,10 @@ private fun TrackCard(
             )
             if (track.isMissing) {
                 Text(stringResource(R.string.warmly_playlist_file_missing))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     val findDescription =
                         stringResource(R.string.warmly_playlist_find_description, track.title)
                     TextButton(
@@ -274,7 +279,10 @@ private fun TrackCard(
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 val moveUpDescription =
                     stringResource(R.string.warmly_playlist_move_up_description, track.title)
                 TextButton(
@@ -319,12 +327,14 @@ private fun TrackCard(
 @Composable
 private fun ImportSummary(summary: WakePlaylistImportSummaryUi) {
     Text(
-        stringResource(
-            R.string.warmly_playlist_import_summary,
-            summary.added,
-            summary.duplicates,
-            summary.unsupported,
-            summary.failed,
-        )
+        text =
+            stringResource(
+                R.string.warmly_playlist_import_summary,
+                summary.added,
+                summary.duplicates,
+                summary.unsupported,
+                summary.failed,
+            ),
+        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
     )
 }

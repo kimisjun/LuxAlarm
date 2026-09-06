@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import kotlinx.coroutines.launch
 
 /** Warmly Solo routes one durable plan to either onboarding or its compact home summary. */
@@ -46,6 +47,12 @@ fun LuxAlarmApp(
         selectedPlaylist = wakePlaylistStore.selectedPlaylistForWake()
         loaded = true
     }
+    LifecycleResumeEffect(wakePlaylistStore, showMusic) {
+        if (!showMusic) {
+            scope.launch { selectedPlaylist = wakePlaylistStore.selectedPlaylistForWake() }
+        }
+        onPauseOrDispose {}
+    }
 
     when {
         !loaded ->
@@ -62,7 +69,12 @@ fun LuxAlarmApp(
         showMusic ->
             WakePlaylistRoute(
                 playlistStore = wakePlaylistStore,
-                onBack = { showMusic = false },
+                onBack = {
+                    scope.launch {
+                        selectedPlaylist = wakePlaylistStore.selectedPlaylistForWake()
+                        showMusic = false
+                    }
+                },
                 onSelectionChanged = { selectedPlaylist = it },
             )
         else ->

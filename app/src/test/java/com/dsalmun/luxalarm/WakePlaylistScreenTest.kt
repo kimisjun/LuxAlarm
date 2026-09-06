@@ -7,6 +7,7 @@ package com.dsalmun.luxalarm
 
 import android.content.res.Configuration
 import androidx.activity.ComponentActivity
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
@@ -104,6 +105,46 @@ class WakePlaylistScreenTest {
                 "Import results · Added: 3 · Duplicates: 2 · Unsupported: 1 · Failed: 4"
             )
             .assertIsDisplayed()
+            .also { node ->
+                assertEquals(
+                    LiveRegionMode.Polite,
+                    node.fetchSemanticsNode().config[SemanticsProperties.LiveRegion],
+                )
+            }
+    }
+
+    @Test
+    fun missingTrackActionsRemainReachableOnNarrowLargeTextScreen() {
+        composeRule.setContent {
+            DeviceConfigurationOverride(
+                DeviceConfigurationOverride.ForcedSize(DpSize(240.dp, 640.dp)) then
+                    DeviceConfigurationOverride.FontScale(2f)
+            ) {
+                LuxAlarmTheme(dynamicColor = false) {
+                    WakePlaylistScreen(
+                        state =
+                            WakePlaylistScreenState(
+                                editor =
+                                    WakePlaylistEditorUi(
+                                        "list",
+                                        "Morning",
+                                        listOf(
+                                            WakePlaylistTrackUi(
+                                                "missing",
+                                                "A very long missing track title",
+                                                isMissing = true,
+                                            )
+                                        ),
+                                    )
+                            ),
+                        onCreatePlaylist = {},
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText("Replace").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Remove from playlist").performScrollTo().assertIsDisplayed()
     }
 
     @Test

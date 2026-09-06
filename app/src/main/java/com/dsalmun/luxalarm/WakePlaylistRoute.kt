@@ -5,8 +5,6 @@
  */
 package com.dsalmun.luxalarm
 
-import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
@@ -17,6 +15,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -28,7 +27,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,111 +35,71 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import java.io.File
-import kotlinx.coroutines.launch
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.CreationExtras
+import androidx.lifecycle.viewmodel.compose.viewModel
 
-/** Connects the stateless playlist UI to durable storage, document import, and preview. */
+/** Connects the stateless playlist UI to lifecycle-safe state and durable operations. */
 @Composable
 fun WakePlaylistRoute(
     playlistStore: WakePlaylistStore,
     onBack: () -> Unit = {},
     onSelectionChanged: (WakePlaylist?) -> Unit = {},
     importDocuments: (suspend (String, List<String>) -> List<WakePlaylistImportResult>)? = null,
-    ownedFileExists: (String) -> Boolean = { File(it).isFile },
+    ownedFileExists: ((String) -> Boolean)? = null,
     deleteOwnedBytes: ((WakeTrack) -> Boolean)? = null,
     usePlatformNameDialog: Boolean = true,
 ) {
     val context = LocalContext.current
-    val audioStore = AppContainer.wakeAudioStore
-    val productionImporter =
-        remember(context, playlistStore, audioStore) {
-            WakePlaylistImporter(
-                localTrackImporter =
-                    LocalTrackImporter(audioStore) { documentUri ->
-                        context.contentResolver.getType(Uri.parse(documentUri))
-                    },
+    val resolver =
+        remember(context, playlistStore) {
+            WakePlaylistDocumentResolver.production(context, playlistStore)
+        }
+    val factory =
+        remember(playlistStore, resolver, importDocuments, ownedFileExists, deleteOwnedBytes) {
+            WakePlaylistViewModelFactory(
                 playlistStore = playlistStore,
-                beforeImport = AppContainer::reconcileWakeAudioBeforeImport,
-                titleFor = { documentUri -> displayNameFor(context, documentUri) },
+                importDocuments = importDocuments ?: resolver::importIntoPlaylist,
+                ownedFileExists =
+                    ownedFileExists?.let { exists -> { path: String -> exists(path) } }
+                        ?: resolver::ownedFileExists,
+                deleteOwnedBytes =
+                    deleteOwnedBytes?.let { delete -> { track: WakeTrack -> delete(track) } }
+                        ?: resolver::deleteOwnedBytes,
             )
         }
-    val doImport = importDocuments ?: productionImporter::importIntoPlaylist
-    val doDelete =
-        deleteOwnedBytes
-            ?: { track: WakeTrack ->
-                runCatching {
-                        audioStore.deleteOwnedBytes(
-                            WakeAudioStore.OwnedTrack(track.id, track.id, track.storedPath)
-                        )
-                    }
-                    .getOrDefault(false)
-            }
-
-    var state by remember(playlistStore) { mutableStateOf(WakePlaylistScreenState()) }
-    var dialog by remember { mutableStateOf<NameDialog?>(null) }
-    var dialogName by remember { mutableStateOf("") }
-    var replacementTrackId by remember { mutableStateOf<String?>(null) }
+    val model: WakePlaylistViewModel = viewModel(factory = factory)
+    val routeState by model.state.collectAsStateWithLifecycle()
+    val state = routeState.screen
     var showPreview by remember { mutableStateOf(false) }
     var previewProgress by remember { mutableFloatStateOf(0f) }
-    val scope = rememberCoroutineScope()
 
-    suspend fun refresh(editorId: String? = state.editor?.id) {
-        val playlists = playlistStore.listPlaylists()
-        val selected = playlistStore.selectedPlaylistForWake()
-        val editorPlaylist = editorId?.let { id -> playlists.singleOrNull { it.id == id } }
-        val editor = editorPlaylist?.let { playlist ->
-            WakePlaylistEditorUi(
-                id = playlist.id,
-                name = playlist.name,
-                tracks =
-                    playlistStore
-                        .listEntries(playlist.id)
-                        .sortedBy(WakePlaylistEntry::position)
-                        .map { entry ->
-                            WakePlaylistTrackUi(
-                                id = entry.track.id,
-                                title = entry.track.title,
-                                isMissing = !ownedFileExists(entry.track.storedPath),
-                            )
-                        },
-            )
+    val importPicker =
+        rememberLauncherForActivityResult(WakeAudioDocumentsContract()) { uris ->
+            model.completePicker(uris)
         }
-        state =
-            state.copy(
-                playlists = playlists.map { WakePlaylistItemUi(it.id, it.name) },
-                selectedForWakeId = selected?.id,
-                editor = editor,
-            )
-        onSelectionChanged(selected)
+    val recoveryPicker =
+        rememberLauncherForActivityResult(WakeAudioDocumentContract()) { uri ->
+            model.completePicker(uri?.let(::listOf).orEmpty())
+        }
+
+    LaunchedEffect(state.selectedForWakeId, state.playlists) {
+        onSelectionChanged(
+            state.selectedForWakeId?.let { id ->
+                state.playlists.singleOrNull { it.id == id }?.let { WakePlaylist(it.id, it.name) }
+            }
+        )
     }
-
-    suspend fun importSelectedDocuments(documentUris: List<String>) {
-        val editor = state.editor ?: return
-        if (documentUris.isEmpty()) return
-        val results = doImport(editor.id, documentUris)
-        val replacement = replacementTrackId
-        replacementTrackId = null
-        if (replacement != null && results.any { it.isSuccessfulMembership() }) {
-            playlistStore.removeTrack(editor.id, replacement)
-        }
-        state = state.copy(importSummary = results.toImportSummary())
-        refresh(editor.id)
-    }
-
-    val audioPicker =
-        rememberLauncherForActivityResult(WakeAudioDocumentsContract()) { documentUris ->
-            scope.launch { importSelectedDocuments(documentUris) }
-        }
-
-    LaunchedEffect(playlistStore) { refresh(editorId = null) }
 
     BackHandler {
-        if (showPreview) {
-            showPreview = false
-        } else if (state.editor != null) {
-            state = state.copy(editor = null, importSummary = null)
-        } else {
-            onBack()
+        when {
+            routeState.busy -> Unit
+            showPreview -> showPreview = false
+            state.editor != null -> model.closeEditor()
+            else -> onBack()
         }
     }
 
@@ -157,120 +115,117 @@ fun WakePlaylistRoute(
     Box(Modifier.fillMaxSize()) {
         WakePlaylistScreen(
             state = state,
-            onCreatePlaylist = {
-                dialogName = ""
-                dialog = NameDialog.Create
+            onCreatePlaylist = model::showCreateDialog,
+            onSelectForWake = model::selectPlaylist,
+            onRenamePlaylist = model::showRenameDialog,
+            onEditPlaylist = model::openEditor,
+            onImportTracks = {
+                model.requestImport()
+                importPicker.launch(Unit)
             },
-            onSelectForWake = { playlistId ->
-                scope.launch {
-                    playlistStore.selectPlaylistForWake(playlistId)
-                    refresh(editorId = null)
-                }
-            },
-            onRenamePlaylist = { playlistId ->
-                val playlist = state.playlists.single { it.id == playlistId }
-                dialogName = playlist.name
-                dialog = NameDialog.Rename(playlistId)
-            },
-            onEditPlaylist = { playlistId -> scope.launch { refresh(playlistId) } },
-            onImportTracks = { audioPicker.launch(Unit) },
             onMoveTrackUp = { trackId ->
-                val editor = state.editor ?: return@WakePlaylistScreen
-                val index = editor.tracks.indexOfFirst { it.id == trackId }
-                if (index > 0) {
-                    scope.launch {
-                        playlistStore.moveTrack(editor.id, trackId, index - 1)
-                        refresh(editor.id)
-                    }
-                }
+                val index = state.editor?.tracks?.indexOfFirst { it.id == trackId } ?: -1
+                if (index > 0) model.moveTrack(trackId, index - 1)
             },
             onMoveTrackDown = { trackId ->
-                val editor = state.editor ?: return@WakePlaylistScreen
-                val index = editor.tracks.indexOfFirst { it.id == trackId }
-                if (index in 0 until editor.tracks.lastIndex) {
-                    scope.launch {
-                        playlistStore.moveTrack(editor.id, trackId, index + 1)
-                        refresh(editor.id)
-                    }
+                val editor = state.editor
+                val index = editor?.tracks?.indexOfFirst { it.id == trackId } ?: -1
+                if (editor != null && index in 0 until editor.tracks.lastIndex) {
+                    model.moveTrack(trackId, index + 1)
                 }
             },
-            onRemoveFromPlaylist = { trackId ->
-                val editor = state.editor ?: return@WakePlaylistScreen
-                scope.launch {
-                    playlistStore.removeTrack(editor.id, trackId)
-                    refresh(editor.id)
-                }
-            },
-            onDeleteOwnedAudio = { trackId ->
-                val editor = state.editor ?: return@WakePlaylistScreen
-                scope.launch {
-                    val entry =
-                        playlistStore.listEntries(editor.id).singleOrNull { it.track.id == trackId }
-                    if (entry != null) doDelete(entry.track)
-                    refresh(editor.id)
-                }
-            },
+            onRemoveFromPlaylist = model::removeTrack,
+            onDeleteOwnedAudio = model::requestDeleteOwnedAudio,
             onFindMissingTrack = { trackId ->
-                replacementTrackId = trackId
-                audioPicker.launch(Unit)
+                model.requestFind(trackId)
+                recoveryPicker.launch(Unit)
             },
             onReplaceMissingTrack = { trackId ->
-                replacementTrackId = trackId
-                audioPicker.launch(Unit)
+                model.requestReplace(trackId)
+                recoveryPicker.launch(Unit)
             },
             onBack = {
                 if (state.editor != null) {
-                    state = state.copy(editor = null, importSummary = null)
-                } else {
+                    model.closeEditor()
+                } else if (!routeState.busy) {
                     onBack()
                 }
             },
             onPreview = {
-                scope.launch {
-                    state.editor?.id?.let { playlistStore.selectPlaylistForWake(it) }
-                    refresh(state.editor?.id)
-                    previewProgress = 0f
-                    showPreview = true
-                }
+                state.editor?.id?.let(model::selectPlaylist)
+                previewProgress = 0f
+                showPreview = true
             },
         )
 
-        dialog?.let { activeDialog ->
+        if (routeState.busy) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.TopEnd).padding(24.dp)
+            )
+        }
+        routeState.error?.let { error ->
+            Text(
+                text = stringResource(error.messageResource()),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(24.dp),
+            )
+        }
+
+        routeState.nameDialog?.let { dialog ->
             PlaylistNameDialog(
                 title =
                     stringResource(
-                        if (activeDialog is NameDialog.Create) {
-                            R.string.warmly_playlist_create
-                        } else {
-                            R.string.warmly_playlist_rename
-                        }
+                        if (dialog is PlaylistNameDialogState.Create) R.string.warmly_playlist_create
+                        else R.string.warmly_playlist_rename
                     ),
-                value = dialogName,
+                value = dialog.name,
                 confirmLabel =
                     stringResource(
-                        if (activeDialog is NameDialog.Create) {
+                        if (dialog is PlaylistNameDialogState.Create) {
                             R.string.warmly_playlist_create_confirm
                         } else {
                             R.string.warmly_playlist_rename_confirm
                         }
                     ),
-                onValueChange = { dialogName = it },
-                onDismiss = { dialog = null },
-                onConfirm = {
-                    val name = dialogName.trim()
-                    dialog = null
-                    scope.launch {
-                        when (activeDialog) {
-                            NameDialog.Create -> playlistStore.createPlaylist(name)
-                            is NameDialog.Rename ->
-                                playlistStore.renamePlaylist(activeDialog.playlistId, name)
-                        }
-                        refresh()
-                    }
-                },
+                busy = routeState.busy,
+                onValueChange = model::updateNameDialog,
+                onDismiss = model::dismissNameDialog,
+                onConfirm = model::confirmNameDialog,
                 usePlatformDialog = usePlatformNameDialog,
             )
         }
+
+        routeState.deleteConfirmationTrackId?.let {
+            ConfirmationDialog(
+                title = stringResource(R.string.warmly_playlist_delete_confirm_title),
+                body = stringResource(R.string.warmly_playlist_delete_confirm_body),
+                confirmLabel = stringResource(R.string.warmly_playlist_delete_confirm),
+                busy = routeState.busy,
+                onDismiss = model::dismissDeleteConfirmation,
+                onConfirm = model::confirmDeleteOwnedAudio,
+                usePlatformDialog = usePlatformNameDialog,
+            )
+        }
+    }
+}
+
+private class WakePlaylistViewModelFactory(
+    private val playlistStore: WakePlaylistStore,
+    private val importDocuments:
+        suspend (String, List<String>) -> List<WakePlaylistImportResult>,
+    private val ownedFileExists: suspend (String) -> Boolean,
+    private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
+) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>, extras: CreationExtras): T {
+        require(modelClass.isAssignableFrom(WakePlaylistViewModel::class.java))
+        @Suppress("UNCHECKED_CAST")
+        return WakePlaylistViewModel(
+            savedStateHandle = extras.createSavedStateHandle(),
+            playlistStore = playlistStore,
+            importDocuments = importDocuments,
+            ownedFileExists = ownedFileExists,
+            deleteOwnedBytes = deleteOwnedBytes,
+        ) as T
     }
 }
 
@@ -279,49 +234,80 @@ private fun PlaylistNameDialog(
     title: String,
     value: String,
     confirmLabel: String,
+    busy: Boolean,
     onValueChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
     usePlatformDialog: Boolean,
 ) {
-    val content: @Composable () -> Unit = {
+    DialogSurface(usePlatformDialog, onDismiss) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(stringResource(R.string.warmly_playlist_name)) },
+            singleLine = true,
+            enabled = !busy,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text(stringResource(R.string.warmly_cancel))
+            }
+            Button(onClick = onConfirm, enabled = value.isNotBlank() && !busy) {
+                Text(confirmLabel)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfirmationDialog(
+    title: String,
+    body: String,
+    confirmLabel: String,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    usePlatformDialog: Boolean,
+) {
+    DialogSurface(usePlatformDialog, onDismiss) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Text(body)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onDismiss, enabled = !busy) {
+                Text(stringResource(R.string.warmly_cancel))
+            }
+            Button(onClick = onConfirm, enabled = !busy) { Text(confirmLabel) }
+        }
+    }
+}
+
+@Composable
+private fun DialogSurface(
+    usePlatformDialog: Boolean,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val surface: @Composable () -> Unit = {
         Surface(shape = MaterialTheme.shapes.large, tonalElevation = 8.dp) {
             Column(
                 modifier = Modifier.padding(24.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(title, style = MaterialTheme.typography.headlineSmall)
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    label = { Text(stringResource(R.string.warmly_playlist_name)) },
-                    singleLine = true,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = onDismiss) {
-                        Text(stringResource(R.string.warmly_cancel))
-                    }
-                    Button(onClick = onConfirm, enabled = value.isNotBlank()) { Text(confirmLabel) }
-                }
+                content()
             }
         }
     }
     if (usePlatformDialog) {
-        Dialog(onDismissRequest = onDismiss) { content() }
+        Dialog(onDismissRequest = onDismiss) { surface() }
     } else {
         Box(
             modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)),
             contentAlignment = Alignment.Center,
         ) {
-            content()
+            surface()
         }
     }
-}
-
-private sealed interface NameDialog {
-    data object Create : NameDialog
-
-    data class Rename(val playlistId: String) : NameDialog
 }
 
 internal fun List<WakePlaylistImportResult>.toImportSummary() =
@@ -332,13 +318,9 @@ internal fun List<WakePlaylistImportResult>.toImportSummary() =
         failed = count { it is WakePlaylistImportResult.Failed },
     )
 
-private fun WakePlaylistImportResult.isSuccessfulMembership(): Boolean =
-    this is WakePlaylistImportResult.Added || this is WakePlaylistImportResult.AlreadyInPlaylist
-
-private fun displayNameFor(context: android.content.Context, documentUri: String): String? =
-    context.contentResolver
-        .query(Uri.parse(documentUri), arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-        ?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-        }
+private fun PlaylistMutationError.messageResource(): Int =
+    when (this) {
+        PlaylistMutationError.DELETE -> R.string.warmly_playlist_delete_failed
+        PlaylistMutationError.LOAD -> R.string.warmly_playlist_load_failed
+        else -> R.string.warmly_playlist_save_failed
+    }

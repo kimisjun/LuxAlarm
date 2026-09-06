@@ -90,6 +90,7 @@ class WakePlaylistRouteTest {
                     playlistStore = store,
                     ownedFileExists = { it !in missingPaths },
                     deleteOwnedBytes = { missingPaths.add(it.storedPath) },
+                    usePlatformNameDialog = false,
                 )
             }
         }
@@ -98,6 +99,7 @@ class WakePlaylistRouteTest {
         composeRule.onNodeWithContentDescription("Move First down").performClick()
         composeRule.onNodeWithContentDescription("Remove First from playlist").performClick()
         composeRule.onNodeWithContentDescription("Delete owned audio Second").performClick()
+        composeRule.onNodeWithText("Delete").performClick()
 
         assertEquals(listOf("first" to 1), store.moveCalls)
         assertEquals(listOf("first"), store.removeCalls)
