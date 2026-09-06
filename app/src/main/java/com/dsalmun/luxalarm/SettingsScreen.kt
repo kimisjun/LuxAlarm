@@ -22,11 +22,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,17 +82,11 @@ fun SettingsScreen(
     settingsManager: SettingsManager = remember { AppContainer.settingsManager },
     currentLightLevel: Float = rememberLightSensorValue(),
 ) {
-    val context = LocalContext.current
     val requiredLuxLevel by settingsManager.requiredLuxLevel.collectAsState()
     val wakeProfile by settingsManager.wakeProfile.collectAsState()
     var sliderValue by remember(requiredLuxLevel) { mutableFloatStateOf(requiredLuxLevel) }
     val scope = rememberCoroutineScope()
-    val audioStore =
-        remember(context) {
-            WakeAudioStore(File(context.filesDir, "gentle-wake-audio")) { documentUri ->
-                context.contentResolver.openInputStream(documentUri.toUri())
-            }
-        }
+    val audioStore = AppContainer.wakeAudioStore
     val audioPicker =
         rememberLauncherForActivityResult(WakeAudioDocumentContract()) { documentUri ->
             if (documentUri != null) {

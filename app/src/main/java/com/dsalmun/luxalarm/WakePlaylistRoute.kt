@@ -37,7 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.core.net.toUri
 import java.io.File
 import kotlinx.coroutines.launch
 
@@ -53,12 +52,7 @@ fun WakePlaylistRoute(
     usePlatformNameDialog: Boolean = true,
 ) {
     val context = LocalContext.current
-    val audioStore =
-        remember(context) {
-            WakeAudioStore(File(context.filesDir, "gentle-wake-audio")) { documentUri ->
-                context.contentResolver.openInputStream(documentUri.toUri())
-            }
-        }
+    val audioStore = AppContainer.wakeAudioStore
     val productionImporter =
         remember(context, playlistStore, audioStore) {
             WakePlaylistImporter(
@@ -67,6 +61,7 @@ fun WakePlaylistRoute(
                         context.contentResolver.getType(Uri.parse(documentUri))
                     },
                 playlistStore = playlistStore,
+                beforeImport = AppContainer::reconcileWakeAudioBeforeImport,
                 titleFor = { documentUri -> displayNameFor(context, documentUri) },
             )
         }

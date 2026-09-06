@@ -6,13 +6,21 @@
 package com.dsalmun.luxalarm
 
 import android.app.Application
+import android.util.Log
 import androidx.annotation.VisibleForTesting
+import androidx.core.net.toUri
 import com.dsalmun.luxalarm.data.IAlarmRepository
 import com.dsalmun.luxalarm.data.RoomSleepPlanStore
 import com.dsalmun.luxalarm.data.RoomWakePlaylistStore
 import com.dsalmun.luxalarm.data.WarmlyDatabase
+import java.io.File
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class AppContainer : Application() {
     companion object {
@@ -21,10 +29,34 @@ class AppContainer : Application() {
         lateinit var settingsManager: SettingsManager
         lateinit var sleepPlanStore: SleepPlanStore
         lateinit var wakePlaylistStore: WakePlaylistStore
+        lateinit var wakeAudioStore: WakeAudioStore
 
         /** Backs the work the disabled legacy broadcast receivers use in focused tests. */
         @VisibleForTesting var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+
+        @VisibleForTesting internal var startupReconciliationJob: Job? = null
+
+        suspend fun reconcileWakeAudio(): WakeAudioStore.ReconciliationReport {
+            val referencedIds =
+                wakePlaylistStore.listLibraryTracks().mapNotNullTo(mutableSetOf()) {
+                    wakeAudioStore.ownedTrackId(it.storedPath)
+                }
+            settingsManager
+                .getWakeProfile()
+                .importedAudioPath
+                ?.let(wakeAudioStore::ownedTrackId)
+                ?.let(referencedIds::add)
+            return wakeAudioStore.reconcile(referencedIds)
+        }
+
+        /** Startup stays nonblocking, while every import waits for and repeats reconciliation. */
+        suspend fun reconcileWakeAudioBeforeImport() {
+            startupReconciliationJob?.join()
+            reconcileWakeAudio()
+        }
     }
+
+    private var applicationScope: CoroutineScope? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -32,5 +64,22 @@ class AppContainer : Application() {
         val database = WarmlyDatabase.getDatabase(this)
         sleepPlanStore = RoomSleepPlanStore(database.sleepPlanDao())
         wakePlaylistStore = RoomWakePlaylistStore(database)
+        wakeAudioStore =
+            WakeAudioStore(File(filesDir, "gentle-wake-audio")) { documentUri ->
+                contentResolver.openInputStream(documentUri.toUri())
+            }
+        val scope = CoroutineScope(SupervisorJob() + ioDispatcher)
+        applicationScope = scope
+        startupReconciliationJob = scope.launch {
+            runCatching { reconcileWakeAudio() }
+                .onFailure { Log.e("AppContainer", "Wake audio reconciliation failed", it) }
+        }
+    }
+
+    override fun onTerminate() {
+        applicationScope?.cancel()
+        applicationScope = null
+        startupReconciliationJob = null
+        super.onTerminate()
     }
 }

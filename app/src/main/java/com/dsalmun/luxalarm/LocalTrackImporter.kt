@@ -29,6 +29,25 @@ sealed interface LocalTrackImportResult {
     ) : LocalTrackImportResult
 }
 
+sealed interface LocalTrackPreparation {
+    val documentUri: String
+
+    data class Ready(
+        override val documentUri: String,
+        val pending: WakeAudioStore.PreparedImport,
+    ) : LocalTrackPreparation
+
+    data class Unsupported(
+        override val documentUri: String,
+        val mimeType: String?,
+    ) : LocalTrackPreparation
+
+    data class Failed(
+        override val documentUri: String,
+        val cause: Throwable,
+    ) : LocalTrackPreparation
+}
+
 class LocalTrackImporter(
     private val store: WakeAudioStore,
     private val mimeTypeFor: (String) -> String?,
@@ -36,20 +55,32 @@ class LocalTrackImporter(
     fun importDocuments(documentUris: List<String>): List<LocalTrackImportResult> =
         documentUris.map(::importDocument)
 
-    private fun importDocument(documentUri: String): LocalTrackImportResult =
-        try {
-            val mimeType = mimeTypeFor(documentUri)
-            if (mimeType?.startsWith("audio/") != true) {
-                LocalTrackImportResult.Unsupported(documentUri, mimeType)
-            } else {
-                when (val result = store.storeDocument(documentUri)) {
+    fun importDocument(documentUri: String): LocalTrackImportResult =
+        when (val preparation = prepareDocument(documentUri)) {
+            is LocalTrackPreparation.Ready -> {
+                preparation.pending.commit()
+                when (val result = preparation.pending.result) {
                     is WakeAudioStore.ImportResult.Added ->
                         LocalTrackImportResult.Added(documentUri, result.track)
                     is WakeAudioStore.ImportResult.Duplicate ->
                         LocalTrackImportResult.Duplicate(documentUri, result.track)
                 }
             }
+            is LocalTrackPreparation.Unsupported ->
+                LocalTrackImportResult.Unsupported(documentUri, preparation.mimeType)
+            is LocalTrackPreparation.Failed ->
+                LocalTrackImportResult.Failed(documentUri, preparation.cause)
+        }
+
+    fun prepareDocument(documentUri: String): LocalTrackPreparation =
+        try {
+            val mimeType = mimeTypeFor(documentUri)
+            if (mimeType?.startsWith("audio/") != true) {
+                LocalTrackPreparation.Unsupported(documentUri, mimeType)
+            } else {
+                LocalTrackPreparation.Ready(documentUri, store.prepareDocument(documentUri))
+            }
         } catch (cause: Exception) {
-            LocalTrackImportResult.Failed(documentUri, cause)
+            LocalTrackPreparation.Failed(documentUri, cause)
         }
 }

@@ -248,6 +248,7 @@ class RoomWakePlaylistStoreTest {
         ApplicationProvider.getApplicationContext<AppContainer>()
 
         kotlin.test.assertIs<RoomWakePlaylistStore>(AppContainer.wakePlaylistStore)
+        kotlin.test.assertIs<com.dsalmun.luxalarm.WakeAudioStore>(AppContainer.wakeAudioStore)
     }
 
     private fun open(): WarmlyDatabase =

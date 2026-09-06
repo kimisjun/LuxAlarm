@@ -14,7 +14,9 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -33,6 +35,273 @@ class WakePlaylistImporterTest {
     fun cleanUp() {
         context.deleteDatabase(databaseName)
         root.deleteRecursively()
+    }
+
+    @Test
+    fun stalePlaylistIsRejectedBeforeAnyDocumentIsOpenedOrCopied() = runTest {
+        val database = open()
+        val playlistStore = RoomWakePlaylistStore(database)
+        var opened = false
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) {
+                        opened = true
+                        ByteArrayInputStream("audio".encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                playlistStore,
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.importIntoPlaylist("deleted-playlist", listOf("content://track"))
+
+        assertIs<WakePlaylistImportResult.Failed>(result.single())
+        assertFalse(opened)
+        assertFalse(File(root, "tracks").exists())
+        database.close()
+    }
+
+    @Test
+    fun eachDocumentIsRegisteredBeforeTheNextDocumentIsCopied() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val events = mutableListOf<String>()
+        val recordingStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration {
+                    events += "register:${track.title}"
+                    return roomStore.registerTrackInPlaylist(playlistId, track)
+                }
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) { uri ->
+                        events += "open:${uri.substringAfterLast('/')}"
+                        ByteArrayInputStream(uri.encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                recordingStore,
+            ) { uri ->
+                uri.substringAfterLast('/')
+            }
+
+        importer.importIntoPlaylist(playlist.id, listOf("content://first", "content://second"))
+
+        assertEquals(
+            listOf("open:first", "register:first", "open:second", "register:second"),
+            events,
+        )
+        database.close()
+    }
+
+    @Test
+    fun registrationFailureRemovesNewlyPublishedBytes() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val failingStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration = error("registration failed")
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) { ByteArrayInputStream("new audio".encodeToByteArray()) }
+                ) {
+                    "audio/mpeg"
+                },
+                failingStore,
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.importIntoPlaylist(playlist.id, listOf("content://track"))
+
+        assertIs<WakePlaylistImportResult.Failed>(result.single())
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+        database.close()
+    }
+
+    @Test
+    fun registrationFailureNeverDeletesPreexistingDuplicateBytes() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val bytes = "shared audio".encodeToByteArray()
+        val audioStore = WakeAudioStore(root) { ByteArrayInputStream(bytes) }
+        val preexisting = audioStore.storeDocument("content://existing").track
+        val failingStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration = error("registration failed")
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(audioStore) { "audio/mpeg" },
+                failingStore,
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.importIntoPlaylist(playlist.id, listOf("content://duplicate"))
+
+        assertIs<WakePlaylistImportResult.Failed>(result.single())
+        assertEquals(bytes.toList(), File(preexisting.path).readBytes().toList())
+        database.close()
+    }
+
+    @Test
+    fun registrationFailureForOneDocumentDoesNotRollbackTheNextSuccess() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        var registrations = 0
+        val firstFailingStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration {
+                    registrations += 1
+                    if (registrations == 1) error("first registration failed")
+                    return roomStore.registerTrackInPlaylist(playlistId, track)
+                }
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) { uri -> ByteArrayInputStream(uri.encodeToByteArray()) }
+                ) {
+                    "audio/mpeg"
+                },
+                firstFailingStore,
+            ) {
+                it.substringAfterLast('/')
+            }
+
+        val results =
+            importer.importIntoPlaylist(
+                playlist.id,
+                listOf("content://first", "content://second"),
+            )
+
+        assertIs<WakePlaylistImportResult.Failed>(results[0])
+        val added = assertIs<WakePlaylistImportResult.Added>(results[1])
+        assertEquals(listOf(added.entry), roomStore.listEntries(playlist.id))
+        assertEquals(
+            listOf(File(added.ownedTrack.path)),
+            File(root, "tracks").listFiles()?.map(File::getAbsoluteFile),
+        )
+        database.close()
+    }
+
+    @Test
+    fun referenceQueryFailureRetainsRecoveryEvidenceUntilReconciliationCanDecide() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val unavailableStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration = error("registration unavailable")
+
+                override suspend fun listLibraryTracks(): List<WakeTrack> =
+                    error("reference query unavailable")
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) { ByteArrayInputStream("orphan".encodeToByteArray()) }
+                ) {
+                    "audio/mpeg"
+                },
+                unavailableStore,
+            ) {
+                "Track.mp3"
+            }
+
+        assertIs<WakePlaylistImportResult.Failed>(
+            importer.importIntoPlaylist(playlist.id, listOf("content://track")).single()
+        )
+        assertTrue(File(root, "tracks/.import.pending").isFile)
+
+        val report = WakeAudioStore(root) { null }.reconcile(emptySet())
+
+        assertEquals(1, report.removedUnreferencedTrackIds.size)
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+        database.close()
+    }
+
+    @Test
+    fun reconciliationAfterMetadataCommitPreservesFinalAndRemovesPendingResidue() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val store = WakeAudioStore(root) { ByteArrayInputStream("committed".encodeToByteArray()) }
+        val pending = store.prepareDocument("content://track")
+        val owned = pending.result.track
+        roomStore.registerTrackInPlaylist(
+            playlist.id,
+            WakeTrack(owned.id, "Track.mp3", owned.path),
+        )
+
+        val report = WakeAudioStore(root) { null }.reconcile(setOf(owned.id))
+
+        assertTrue(report.removedStaging)
+        assertTrue(File(owned.path).isFile)
+        assertEquals(setOf(owned.id), File(root, "tracks").listFiles()?.map(File::getName)?.toSet())
+        database.close()
+    }
+
+    @Test
+    fun retryReconciliationRunsBeforeOpeningADocument() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val store = WakeAudioStore(root) { ByteArrayInputStream("stale".encodeToByteArray()) }
+        store.prepareDocument("content://stale")
+        var reconciled = false
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) {
+                        assertTrue(reconciled)
+                        ByteArrayInputStream("fresh".encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                roomStore,
+                beforeImport = {
+                    WakeAudioStore(root) { null }.reconcile(emptySet())
+                    reconciled = true
+                },
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.importIntoPlaylist(playlist.id, listOf("content://fresh"))
+
+        assertIs<WakePlaylistImportResult.Added>(result.single())
+        database.close()
     }
 
     @Test

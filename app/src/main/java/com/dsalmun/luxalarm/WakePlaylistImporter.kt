@@ -36,62 +36,83 @@ sealed interface WakePlaylistImportResult {
 class WakePlaylistImporter(
     private val localTrackImporter: LocalTrackImporter,
     private val playlistStore: WakePlaylistStore,
+    private val beforeImport: suspend () -> Unit = {},
     private val titleFor: (String) -> String?,
 ) {
     suspend fun importIntoPlaylist(
         playlistId: String,
         documentUris: List<String>,
-    ): List<WakePlaylistImportResult> =
-        localTrackImporter.importDocuments(documentUris).map { result ->
-            when (result) {
-                is LocalTrackImportResult.Added ->
-                    registerImported(
-                        playlistId = playlistId,
-                        documentUri = result.documentUri,
-                        ownedTrack = result.track,
-                        duplicateContent = false,
-                    )
-                is LocalTrackImportResult.Duplicate ->
-                    registerImported(
-                        playlistId = playlistId,
-                        documentUri = result.documentUri,
-                        ownedTrack = result.track,
-                        duplicateContent = true,
-                    )
-                is LocalTrackImportResult.Unsupported ->
-                    WakePlaylistImportResult.Unsupported(result.documentUri, result.mimeType)
-                is LocalTrackImportResult.Failed ->
-                    WakePlaylistImportResult.Failed(result.documentUri, result.cause)
+    ): List<WakePlaylistImportResult> {
+        if (playlistStore.listPlaylists().none { it.id == playlistId }) {
+            return documentUris.map { documentUri ->
+                WakePlaylistImportResult.Failed(
+                    documentUri,
+                    IllegalArgumentException("Playlist does not exist: $playlistId"),
+                )
             }
         }
+        try {
+            beforeImport()
+        } catch (cause: Exception) {
+            return documentUris.map { WakePlaylistImportResult.Failed(it, cause) }
+        }
+        return documentUris.map { documentUri ->
+            when (val preparation = localTrackImporter.prepareDocument(documentUri)) {
+                is LocalTrackPreparation.Ready ->
+                    registerPrepared(playlistId, preparation.documentUri, preparation.pending)
+                is LocalTrackPreparation.Unsupported ->
+                    WakePlaylistImportResult.Unsupported(
+                        preparation.documentUri,
+                        preparation.mimeType,
+                    )
+                is LocalTrackPreparation.Failed ->
+                    WakePlaylistImportResult.Failed(preparation.documentUri, preparation.cause)
+            }
+        }
+    }
 
-    private suspend fun registerImported(
+    private suspend fun registerPrepared(
         playlistId: String,
         documentUri: String,
-        ownedTrack: WakeAudioStore.OwnedTrack,
-        duplicateContent: Boolean,
-    ): WakePlaylistImportResult =
-        try {
+        pending: WakeAudioStore.PreparedImport,
+    ): WakePlaylistImportResult {
+        val stored = pending.result
+        val ownedTrack = stored.track
+        return try {
             val track = WakeTrack(ownedTrack.id, safeTitleFor(documentUri), ownedTrack.path)
-            when (val registration = playlistStore.registerTrackInPlaylist(playlistId, track)) {
-                is WakePlaylistRegistration.Added ->
-                    WakePlaylistImportResult.Added(
-                        documentUri = documentUri,
-                        ownedTrack = ownedTrack,
-                        entry = registration.entry,
-                        duplicateContent = duplicateContent,
-                    )
-                is WakePlaylistRegistration.AlreadyPresent ->
-                    WakePlaylistImportResult.AlreadyInPlaylist(
-                        documentUri = documentUri,
-                        ownedTrack = ownedTrack,
-                        entry = registration.entry,
-                        duplicateContent = duplicateContent,
-                    )
-            }
+            val result =
+                when (val registration = playlistStore.registerTrackInPlaylist(playlistId, track)) {
+                    is WakePlaylistRegistration.Added ->
+                        WakePlaylistImportResult.Added(
+                            documentUri = documentUri,
+                            ownedTrack = ownedTrack,
+                            entry = registration.entry,
+                            duplicateContent = stored is WakeAudioStore.ImportResult.Duplicate,
+                        )
+                    is WakePlaylistRegistration.AlreadyPresent ->
+                        WakePlaylistImportResult.AlreadyInPlaylist(
+                            documentUri = documentUri,
+                            ownedTrack = ownedTrack,
+                            entry = registration.entry,
+                            duplicateContent = stored is WakeAudioStore.ImportResult.Duplicate,
+                        )
+                }
+            pending.commit()
+            result
         } catch (cause: Exception) {
+            val referenced = runCatching {
+                playlistStore.listLibraryTracks().any { it.id == ownedTrack.id }
+            }
+            runCatching {
+                    referenced.fold(
+                        onSuccess = pending::rollback,
+                        onFailure = { pending.deferToReconciliation() },
+                    )
+                }
+                .onFailure(cause::addSuppressed)
             WakePlaylistImportResult.Failed(documentUri, cause)
         }
+    }
 
     private fun safeTitleFor(documentUri: String): String =
         try {
