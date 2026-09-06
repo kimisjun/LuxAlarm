@@ -135,6 +135,24 @@ class WarmlyAppEntryTest {
     }
 
     @Test
+    fun returningFromMusicClosesTheRouteWhenSelectionReloadFails() {
+        val store =
+            FakeAppWakePlaylistStore(
+                playlists = listOf(WakePlaylist("morning", "Morning calm")),
+                selectedId = "morning",
+            )
+        setContent(FakeSleepPlanStore(SleepPlan(7 * 60, 23 * 60, -1)), store)
+        composeRule.onNodeWithText("Music").performClick()
+        composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+        composeRule.runOnIdle { store.failSelectionReads = true }
+
+        composeRule.onNodeWithText("Back").performClick()
+
+        composeRule.onNodeWithText("Wake playlists").assertDoesNotExist()
+        composeRule.onNodeWithText("Wake music · Morning calm").assertIsDisplayed()
+    }
+
+    @Test
     fun completingOnboardingSavesAndShowsHome() {
         val store = FakeSleepPlanStore()
         setContent(store)
@@ -163,6 +181,8 @@ private class FakeAppWakePlaylistStore(
     private val playlists: List<WakePlaylist> = emptyList(),
     private var selectedId: String? = null,
 ) : WakePlaylistStore {
+    var failSelectionReads = false
+
     override suspend fun createPlaylist(name: String) = error("Not needed")
 
     override suspend fun listPlaylists() = playlists
@@ -173,7 +193,10 @@ private class FakeAppWakePlaylistStore(
         selectedId = playlistId
     }
 
-    override suspend fun selectedPlaylistForWake() = playlists.singleOrNull { it.id == selectedId }
+    override suspend fun selectedPlaylistForWake(): WakePlaylist? {
+        if (failSelectionReads) error("selection unavailable")
+        return playlists.singleOrNull { it.id == selectedId }
+    }
 
     override suspend fun addTrackToLibrary(title: String, storedPath: String) = error("Not needed")
 

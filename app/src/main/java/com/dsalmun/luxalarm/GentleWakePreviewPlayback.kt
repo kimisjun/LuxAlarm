@@ -370,16 +370,17 @@ internal fun GentleWakePreviewRoute(
             controller.close()
             onAwake()
         },
-        playbackStatus = statusOverride ?: playbackState.statusText(),
+        playbackStatus = playbackState.statusText(statusOverride),
         modifier = modifier,
     )
 }
 
 @Composable
-private fun GentleWakePreviewPlaybackState?.statusText(): String? =
+private fun GentleWakePreviewPlaybackState?.statusText(statusOverride: String? = null): String? =
     when (this) {
-        GentleWakePreviewPlaybackState.PlayingFallback ->
-            stringResource(R.string.warmly_preview_fallback)
         GentleWakePreviewPlaybackState.Failed -> stringResource(R.string.warmly_preview_failed)
+        GentleWakePreviewPlaybackState.PlayingFallback ->
+            statusOverride ?: stringResource(R.string.warmly_preview_fallback)
+        GentleWakePreviewPlaybackState.PlayingDefault -> statusOverride
         else -> null
     }

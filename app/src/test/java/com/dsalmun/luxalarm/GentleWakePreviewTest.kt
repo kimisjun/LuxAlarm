@@ -318,6 +318,108 @@ class GentleWakePreviewTest {
     }
 
     @Test
+    fun resolutionFailureWithoutADefaultAlarmReportsPlaybackFailure() {
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                WakePlaylist("unused", "Unused"),
+                emptyList(),
+            )
+        val factory = PreviewRecordingFactory()
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = null,
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        selection.completeExceptionally(IllegalStateException("database unavailable"))
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
+    }
+
+    @Test
+    fun resolutionFailureWithFallbackCreationFailureReportsPlaybackFailure() {
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                WakePlaylist("unused", "Unused"),
+                emptyList(),
+            )
+        val defaultUri = Uri.parse("content://settings/system/alarm_alert")
+        val factory = PreviewRecordingFactory(failAll = true)
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = defaultUri,
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        selection.completeExceptionally(IllegalStateException("database unavailable"))
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(listOf(defaultUri), factory.requestedUris) }
+    }
+
+    @Test
+    fun resolutionFailureFallbackRuntimeErrorReportsPlaybackFailure() {
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                WakePlaylist("unused", "Unused"),
+                emptyList(),
+            )
+        val defaultUri = Uri.parse("content://settings/system/alarm_alert")
+        val factory = PreviewRecordingFactory()
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = defaultUri,
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        selection.completeExceptionally(IllegalStateException("database unavailable"))
+        composeRule.waitForIdle()
+        composeRule
+            .onNodeWithText("Imported music failed · Playing default alarm sound")
+            .assertIsDisplayed()
+
+        composeRule.runOnIdle { factory.player.fail() }
+
+        composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
+    }
+
+    @Test
     fun routePlaysTheImportedMusicAndReleasesItWhenThePreviewCloses() {
         val importedUri = Uri.parse("file:///private/selected-audio")
         val defaultUri = Uri.parse("content://settings/system/alarm_alert")
@@ -441,6 +543,7 @@ class GentleWakePreviewTest {
             requestedUris += uri
             if (failAll || uri == failingUri) return null
             player.initialVolume = initialVolume
+            player.onError = onError
             return player
         }
     }
@@ -450,6 +553,9 @@ class GentleWakePreviewTest {
         var lastVolume = Float.NaN
         var stopped = false
         var released = false
+        var onError: () -> Unit = {}
+
+        fun fail() = onError()
 
         override fun setVolume(volume: Float) {
             lastVolume = volume
