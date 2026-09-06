@@ -17,17 +17,14 @@ class LegacyWakeAudioImporter(
     private val referencedPath: () -> String? = {
         settingsManager.getWakeProfile().importedAudioPath
     },
-    private val commitProfile: suspend (WakeProfile) -> Boolean =
-        settingsManager::commitWakeProfile,
+    private val commitImportedAudioPath: suspend (String) -> Boolean =
+        settingsManager::commitImportedAudioPath,
 ) {
-    suspend fun importDocument(
-        documentUri: String,
-        profileAtSelection: WakeProfile,
-    ): WakeAudioSource.Imported = transaction {
+    suspend fun importDocument(documentUri: String): WakeAudioSource.Imported = transaction {
         val pending = audioStore.prepareDocument(documentUri)
         val imported = WakeAudioSource.Imported(pending.result.track.path)
         try {
-            check(commitProfile(profileAtSelection.copy(importedAudioPath = imported.path))) {
+            check(commitImportedAudioPath(imported.path)) {
                 "Wake audio settings commit failed"
             }
             pending.commit()

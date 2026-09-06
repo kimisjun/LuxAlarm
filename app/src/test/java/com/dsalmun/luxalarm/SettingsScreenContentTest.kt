@@ -101,8 +101,8 @@ class SettingsScreenContentTest {
     }
 
     @Test
-    fun gentleWakeSettingsShowDefaultsAndReportWholeProfileAndAudioActions() {
-        val profiles = mutableListOf<WakeProfile>()
+    fun gentleWakeSettingsShowDefaultsAndReportDismissalIntentAndAudioActions() {
+        val dismissals = mutableListOf<WakeDismissal>()
         var audioPicks = 0
         composeRule.setContent {
             LuxAlarmTheme(dynamicColor = false) {
@@ -113,7 +113,7 @@ class SettingsScreenContentTest {
                     onBackClick = {},
                     onLuxLevelChange = {},
                     onLuxLevelChangeFinished = {},
-                    onWakeProfileChange = { profiles += it },
+                    onDismissalChange = { dismissals += it },
                     onImportAudioClick = { audioPicks++ },
                 )
             }
@@ -124,7 +124,7 @@ class SettingsScreenContentTest {
         composeRule.onNodeWithText("Lux 미션 (선택)").performClick()
         composeRule.onNodeWithText("휴대폰 음악 가져오기").performClick()
 
-        assertEquals(listOf(WakeProfile(dismissal = WakeDismissal.LUX)), profiles)
+        assertEquals(listOf(WakeDismissal.LUX), dismissals)
         assertEquals(1, audioPicks)
     }
 

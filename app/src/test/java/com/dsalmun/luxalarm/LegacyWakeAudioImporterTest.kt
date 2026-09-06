@@ -15,6 +15,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
@@ -52,7 +53,7 @@ class LegacyWakeAudioImporterTest {
             )
 
         assertFailsWith<IllegalStateException> {
-            importer.importDocument("content://new", settings.getWakeProfile())
+            importer.importDocument("content://new")
         }
 
         assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
@@ -68,7 +69,7 @@ class LegacyWakeAudioImporterTest {
         val importer = LegacyWakeAudioImporter(store, settings)
 
         assertFailsWith<IllegalStateException> {
-            importer.importDocument("content://duplicate", settings.getWakeProfile())
+            importer.importDocument("content://duplicate")
         }
 
         assertTrue(File(existing.path).isFile)
@@ -92,7 +93,7 @@ class LegacyWakeAudioImporterTest {
             )
 
         assertFailsWith<IllegalStateException> {
-            importer.importDocument("content://audio", settings.getWakeProfile())
+            importer.importDocument("content://audio")
         }
 
         val durablePath = SettingsManager(context).getWakeProfile().importedAudioPath
@@ -111,7 +112,7 @@ class LegacyWakeAudioImporterTest {
             )
 
         assertFailsWith<IllegalStateException> {
-            importer.importDocument("content://audio", settings.getWakeProfile())
+            importer.importDocument("content://audio")
         }
 
         assertTrue(File(root, "tracks/.import.pending").isFile)
@@ -128,13 +129,13 @@ class LegacyWakeAudioImporterTest {
                 WakeAudioStore(root) { ByteArrayInputStream("audio".encodeToByteArray()) },
                 settings,
                 transaction = { operation -> coordinator.withTransaction { operation() } },
-                commitProfile = { profile ->
+                commitImportedAudioPath = { path ->
                     writerEntered.complete(Unit)
                     releaseWriter.await()
-                    settings.commitWakeProfile(profile)
+                    settings.commitImportedAudioPath(path)
                 },
             )
-        val import = async { importer.importDocument("content://audio", settings.getWakeProfile()) }
+        val import = async { importer.importDocument("content://audio") }
         writerEntered.await()
 
         var reconciled = false
@@ -148,5 +149,54 @@ class LegacyWakeAudioImporterTest {
         import.await()
         reconciliation.await()
         assertTrue(reconciled)
+    }
+
+    @Test
+    fun concurrentDismissalChangeDuringImportPreservesDismissalAndImportedPath() = runTest {
+        val settings = SettingsManager(context)
+        settings.updateWakeProfile(WakeProfile(dismissal = WakeDismissal.CONFIRM))
+        val commitEntered = CompletableDeferred<Unit>()
+        val releaseCommit = CompletableDeferred<Unit>()
+        val importer =
+            LegacyWakeAudioImporter(
+                WakeAudioStore(root) { ByteArrayInputStream("audio".encodeToByteArray()) },
+                settings,
+                commitImportedAudioPath = { path ->
+                    commitEntered.complete(Unit)
+                    releaseCommit.await()
+                    settings.commitImportedAudioPath(path)
+                },
+            )
+        val import = async {
+            importer.importDocument("content://audio")
+        }
+        commitEntered.await()
+
+        settings.setWakeDismissal(WakeDismissal.LUX)
+        releaseCommit.complete(Unit)
+        val imported = import.await()
+
+        assertEquals(WakeDismissal.LUX, settings.getWakeProfile().dismissal)
+        assertEquals(imported.path, settings.getWakeProfile().importedAudioPath)
+    }
+
+    @Test
+    fun cancellationDuringSettingsCommitIsRethrownAfterRollingBackPublishedBytes() = runTest {
+        val settings = SettingsManager(context)
+        val importer =
+            LegacyWakeAudioImporter(
+                WakeAudioStore(root) { ByteArrayInputStream("audio".encodeToByteArray()) },
+                settings,
+                commitImportedAudioPath = { throw CancellationException("cancel import") },
+            )
+
+        val cancellation =
+            assertFailsWith<CancellationException> {
+                importer.importDocument("content://audio")
+            }
+
+        assertEquals("cancel import", cancellation.message)
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+        assertEquals(null, settings.getWakeProfile().importedAudioPath)
     }
 }

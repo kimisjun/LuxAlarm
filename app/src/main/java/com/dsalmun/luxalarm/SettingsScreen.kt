@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -100,11 +101,14 @@ fun SettingsScreen(
     val audioPicker =
         rememberLauncherForActivityResult(WakeAudioDocumentContract()) { documentUri ->
             if (documentUri != null) {
-                val profileAtSelection = settingsManager.getWakeProfile()
                 scope.launch {
                     withContext(Dispatchers.IO) {
-                        runCatching {
-                            legacyAudioImporter.importDocument(documentUri, profileAtSelection)
+                        try {
+                            legacyAudioImporter.importDocument(documentUri)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            // The existing profile remains authoritative after a failed import.
                         }
                     }
                 }
@@ -124,7 +128,7 @@ fun SettingsScreen(
         onBackClick = onBackClick,
         onLuxLevelChange = { sliderValue = it },
         onLuxLevelChangeFinished = { settingsManager.setRequiredLuxLevel(sliderValue) },
-        onWakeProfileChange = settingsManager::updateWakeProfile,
+        onDismissalChange = { settingsManager.setWakeDismissal(it) },
         onImportAudioClick = { audioPicker.launch(Unit) },
     )
 }
@@ -138,7 +142,7 @@ fun SettingsScreenContent(
     onBackClick: () -> Unit,
     onLuxLevelChange: (Float) -> Unit,
     onLuxLevelChangeFinished: () -> Unit,
-    onWakeProfileChange: (WakeProfile) -> Unit = {},
+    onDismissalChange: (WakeDismissal) -> Unit = {},
     onImportAudioClick: () -> Unit = {},
 ) {
     Scaffold(
@@ -168,7 +172,7 @@ fun SettingsScreenContent(
         ) {
             WakeProfileSetting(
                 profile = wakeProfile,
-                onProfileChange = onWakeProfileChange,
+                onDismissalChange = onDismissalChange,
                 onImportAudioClick = onImportAudioClick,
             )
             Spacer(modifier = Modifier.height(16.dp))
@@ -185,7 +189,7 @@ fun SettingsScreenContent(
 @Composable
 private fun WakeProfileSetting(
     profile: WakeProfile,
-    onProfileChange: (WakeProfile) -> Unit,
+    onDismissalChange: (WakeDismissal) -> Unit,
     onImportAudioClick: () -> Unit,
 ) {
     Card(
@@ -208,13 +212,13 @@ private fun WakeProfileSetting(
                 FilterChip(
                     selected = profile.dismissal == WakeDismissal.CONFIRM,
                     onClick = {
-                        onProfileChange(profile.copy(dismissal = WakeDismissal.CONFIRM))
+                        onDismissalChange(WakeDismissal.CONFIRM)
                     },
                     label = { Text("확인") },
                 )
                 FilterChip(
                     selected = profile.dismissal == WakeDismissal.LUX,
-                    onClick = { onProfileChange(profile.copy(dismissal = WakeDismissal.LUX)) },
+                    onClick = { onDismissalChange(WakeDismissal.LUX) },
                     label = { Text("Lux 미션 (선택)") },
                 )
             }

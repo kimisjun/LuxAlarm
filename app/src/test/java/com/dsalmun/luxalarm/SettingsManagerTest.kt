@@ -11,6 +11,7 @@ import androidx.core.content.edit
 import androidx.test.core.app.ApplicationProvider
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -110,6 +111,31 @@ class SettingsManagerTest {
 
         assertEquals(null, manager.wakeProfile.value.importedAudioPath)
         assertEquals(null, SettingsManager(context).getWakeProfile().importedAudioPath)
+    }
+
+    @Test
+    fun failedImportedPathCommitPreservesCurrentProfile() {
+        SettingsManager(context).updateWakeProfile(WakeProfile(dismissal = WakeDismissal.LUX))
+        val manager = SettingsManager(context, commitEditor = { false })
+
+        assertFalse(manager.commitImportedAudioPath("/owned/audio"))
+
+        assertEquals(WakeDismissal.LUX, manager.wakeProfile.value.dismissal)
+        assertEquals(null, manager.wakeProfile.value.importedAudioPath)
+        assertEquals(WakeDismissal.LUX, SettingsManager(context).getWakeProfile().dismissal)
+        assertEquals(null, SettingsManager(context).getWakeProfile().importedAudioPath)
+    }
+
+    @Test
+    fun dismissalIntentAfterImportCannotEraseImportedPathFromStaleUiState() {
+        val manager = SettingsManager(context)
+        val staleUiProfile = manager.getWakeProfile()
+        assertTrue(manager.commitImportedAudioPath("/owned/audio"))
+
+        manager.setWakeDismissal(staleUiProfile.copy(dismissal = WakeDismissal.LUX).dismissal)
+
+        assertEquals(WakeDismissal.LUX, manager.getWakeProfile().dismissal)
+        assertEquals("/owned/audio", manager.getWakeProfile().importedAudioPath)
     }
 
     /** The StateFlow is per-instance; harmless while [AppContainer] builds exactly one. */

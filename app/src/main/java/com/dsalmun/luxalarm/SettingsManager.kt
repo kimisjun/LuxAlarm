@@ -42,7 +42,9 @@ class SettingsManager(
         _requiredLuxLevel.value = level
     }
 
-    fun getWakeProfile(): WakeProfile =
+    fun getWakeProfile(): WakeProfile = synchronized(wakeProfileLock) { readWakeProfile() }
+
+    private fun readWakeProfile(): WakeProfile =
         WakeProfile(
             rampMinutes = prefs.getInt(KEY_WAKE_RAMP_MINUTES, WakeRamp.DEFAULT_RAMP_MINUTES),
             startVolume = prefs.getFloat(KEY_WAKE_START_VOLUME, WakeRamp.DEFAULT_START_VOLUME),
@@ -54,34 +56,53 @@ class SettingsManager(
             importedAudioPath = prefs.getString(KEY_WAKE_IMPORTED_AUDIO_PATH, null),
         )
 
-    /** Every dependent ramp value is committed through one editor and emitted as one profile. */
+    /**
+     * Replaces the complete profile under the same lock used by intent-specific mutations.
+     * Production UI callbacks use the field APIs below so a stale UI snapshot cannot replace
+     * unrelated fields.
+     */
     fun updateWakeProfile(profile: WakeProfile) {
-        prefs.edit {
-            putInt(KEY_WAKE_RAMP_MINUTES, profile.rampMinutes)
-            putFloat(KEY_WAKE_START_VOLUME, profile.startVolume)
-            putFloat(KEY_WAKE_MAX_VOLUME, profile.maxVolume)
-            putString(KEY_WAKE_DISMISSAL, profile.dismissal.name)
-            putString(KEY_WAKE_IMPORTED_AUDIO_PATH, profile.importedAudioPath)
-        }
-        _wakeProfile.value = profile
+        commitWakeProfile(profile)
     }
 
     /** Durably publishes an imported-file reference before its pending marker may be cleared. */
-    fun commitWakeProfile(profile: WakeProfile): Boolean {
-        val editor =
-            prefs
-                .edit()
-                .putInt(KEY_WAKE_RAMP_MINUTES, profile.rampMinutes)
-                .putFloat(KEY_WAKE_START_VOLUME, profile.startVolume)
-                .putFloat(KEY_WAKE_MAX_VOLUME, profile.maxVolume)
-                .putString(KEY_WAKE_DISMISSAL, profile.dismissal.name)
-                .putString(KEY_WAKE_IMPORTED_AUDIO_PATH, profile.importedAudioPath)
-        val committed = commitEditor(editor)
-        if (committed) _wakeProfile.value = profile
-        return committed
+    fun commitImportedAudioPath(path: String): Boolean = mutateWakeProfile { current ->
+        current.copy(importedAudioPath = path)
     }
 
+    fun setWakeDismissal(dismissal: WakeDismissal): Boolean = mutateWakeProfile { current ->
+        current.copy(dismissal = dismissal)
+    }
+
+    /** Whole-profile compatibility API. Prefer intent-specific mutations in production UI. */
+    fun commitWakeProfile(profile: WakeProfile): Boolean = mutateWakeProfile { profile }
+
+    private fun mutateWakeProfile(transform: (WakeProfile) -> WakeProfile): Boolean =
+        synchronized(wakeProfileLock) {
+            val current = readWakeProfile()
+            val profile = transform(current)
+            if (profile == current) {
+                _wakeProfile.value = profile
+                return@synchronized true
+            }
+            val committed = commitEditor(profileEditor(profile))
+            if (committed) _wakeProfile.value = profile
+            committed
+        }
+
+    private fun profileEditor(profile: WakeProfile): SharedPreferences.Editor =
+        prefs
+            .edit()
+            .putInt(KEY_WAKE_RAMP_MINUTES, profile.rampMinutes)
+            .putFloat(KEY_WAKE_START_VOLUME, profile.startVolume)
+            .putFloat(KEY_WAKE_MAX_VOLUME, profile.maxVolume)
+            .putString(KEY_WAKE_DISMISSAL, profile.dismissal.name)
+            .putString(KEY_WAKE_IMPORTED_AUDIO_PATH, profile.importedAudioPath)
+
     companion object {
+        // All instances address the same named preferences file. Keeping this process-wide also
+        // serializes a short-lived secondary manager with the AppContainer singleton.
+        private val wakeProfileLock = Any()
         private const val PREFS_NAME = "lux_alarm_settings"
         private const val KEY_REQUIRED_LUX_LEVEL = "required_lux_level"
         private const val KEY_WAKE_RAMP_MINUTES = "wake_ramp_minutes"
