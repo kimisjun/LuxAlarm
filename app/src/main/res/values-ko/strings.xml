@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Warmly</string>
+    <string name="gpl_modification_notice">Warmly는 Lux Alarm 2.4.1을 기반으로 2026년에 수정된 GPLv3 소프트웨어입니다.</string>
+    <string name="warmly_brand">WARMLY</string>
+    <string name="warmly_welcome_title">부드럽게 깨고, 기분 좋게 시작해요.</string>
+    <string name="warmly_welcome_body">지금은 내일 일어날 시간과 잘 시간을 정해요. 알람·빛·음악·진동은 다음 개발 단계에서 연결합니다.</string>
+    <string name="warmly_create_first_plan">첫 수면 계획 만들기</string>
+    <string name="warmly_open_source_action">오픈소스 안내</string>
+    <string name="warmly_open_source_title">오픈소스 소프트웨어</string>
+    <string name="warmly_close">닫기</string>
+    <string name="warmly_onboarding_step_wake">1 · 기상 시각</string>
+    <string name="warmly_wake_question">몇 시에 일어날까요?</string>
+    <string name="warmly_decrease_wake_time">기상 시각 15분 앞당기기</string>
+    <string name="warmly_increase_wake_time">기상 시각 15분 늦추기</string>
+    <string name="warmly_next">다음</string>
+    <string name="warmly_onboarding_step_bedtime">2 · 취침 추천</string>
+    <string name="warmly_bedtime_question">언제 자면 좋을까요?</string>
+    <string name="warmly_bedtime_note">일반적인 수면 시간을 참고하고 잠드는 데 약 15분을 포함했어요. 필요한 수면 시간은 사람마다 달라요.</string>
+    <string name="warmly_bedtime_nine_hours">약 9시간 수면</string>
+    <string name="warmly_bedtime_eight_hours">약 8시간 수면</string>
+    <string name="warmly_bedtime_seven_and_half_hours">약 7시간 30분 수면</string>
+    <string name="warmly_custom_bedtime">직접 설정</string>
+    <string name="warmly_selected_bedtime">선택한 취침 시각 · %1$s</string>
+    <string name="warmly_onboarding_step_custom_bedtime">2 · 직접 설정</string>
+    <string name="warmly_custom_bedtime_question">취침 시각을 정해주세요</string>
+    <string name="warmly_decrease_bedtime">취침 시각 15분 앞당기기</string>
+    <string name="warmly_increase_bedtime">취침 시각 15분 늦추기</string>
+    <string name="warmly_minus_15">15분 앞당기기</string>
+    <string name="warmly_plus_15">15분 늦추기</string>
+    <string name="warmly_use_this_time">이 시각 사용</string>
+    <string name="warmly_save_sleep_plan">이 수면 계획 저장</string>
+    <string name="warmly_home_wake_label">내일 일어날 시간</string>
+    <string name="warmly_home_bedtime">취침 시각 · %1$s</string>
+    <string name="warmly_home_saved_locally">이 기기에 저장했어요. 실제 알람 예약은 다음 개발 단계에서 연결합니다.</string>
+</resources>

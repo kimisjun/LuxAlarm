@@ -1,94 +1,52 @@
-# GentleWake 기술 설계
+# Warmly Solo 기술 설계
 
-작성: 2026-09-03
+작성: 2026-09-06
 
-## 제품 원칙
+## 제품 경계
 
-- 놀라게 하는 단일 경보보다 `어두운 빛 → 음악 → 진동 → 목표 시각 백업 경보`의 단계적 루틴을 우선한다.
-- 기본 동작은 네트워크·Hermes·스트리밍 서비스 없이 휴대폰 단독으로 완료된다.
-- 가져온 음원은 앱 관리 저장소로 복사해 원본 파일 위치가 바뀌어도 유지한다.
-- 실제 알람 성공 여부와 사용자의 `일어났어요` 확인을 분리해 기록한다.
-- Lux 미션은 알람별 선택 옵션이며 센서가 없거나 권한이 막히면 안전하게 기상 확인 버튼으로 돌아간다.
+Warmly Solo는 Android에서 하나의 활성 수면 계획을 관리하는 로컬 우선 기상 앱이다. 현재 구현은 첫 수면 계획의 입력·저장·홈 표시까지이며, 실제 알람 예약과 기상 실행은 아직 연결하지 않았다.
 
-## MVP 기본 프로필
+## 출처와 라이선스
 
-| 단계 | 목표 시각 기준 | 화면 | 음악 | 진동 |
-|---|---:|---|---|---|
-| 새벽빛 | -20분 | 거의 검은 암갈색 | 5% | 없음 |
-| 여명 | -15분 | 낮은 주황빛 | 12% | 없음 |
-| 일출 | -10분 | 따뜻한 주황빛 | 20% | 약함 |
-| 기상 유도 | -5분 | 밝은 크림빛 | 28% | 중간 |
-| 목표 시각 | 0분 | 밝은 일출빛 | 최대 35% | 뚜렷함 + 백업 경보 |
+- 기반: Lux Alarm 2.4.1 by Daniel Salmun, upstream commit `147ea5c4ce4ea416a1d02975754cc12496e73433`
+- 라이선스: GPL-3.0-or-later
+- Warmly 수정 범위와 현재 비구현 기능: `NOTICE.md`
+- 새 application ID: `com.kimisjun.warmly`
 
-수치는 사용자 설정으로 변경 가능하고, 보간은 계단식이 아니라 매끄러운 곡선을 사용한다.
-
-## 공통 도메인 모델
+## 현재 첫 슬라이스
 
 ```text
-WakeAlarm
-- id
-- time / repeatDays / enabled
-- rampDuration
-- startVolume / maxVolume
-- sound: bundled | imported
-- vibrationCurve
-- sunrisePalette
-- dismissal: confirm | lux(threshold, holdDuration)
-- fallbackAlarmEnabled
-
-WakePhase
-- sleeping / dawn / sunrise / prompting / fallback / completed
-
-WakeRun
-- scheduledAt / startedAt / targetAt
-- phase / completedAt / completionMethod
-- lastFailure
+WarmlyOnboardingScreen
+  → 사용자 기상 시각
+  → 취침 추천 3개 또는 직접 설정
+  → SleepPlan
+  → RoomSleepPlanStore
+  → WarmlyDatabase(singleton row)
+  → 저장된 계획 홈 요약
 ```
 
-공통으로 공유하는 것은 JSON 규격과 테스트 벡터이며, 플랫폼 알람 실행 코드는 네이티브로 분리한다.
+- `SleepPlan`: 기상 분, 취침 분, 취침 날짜 offset
+- `SleepPlanEntity`: 기본키가 1인 단일 행
+- `SleepPlanStore`: UI와 Room 사이의 suspend 저장 경계
+- `LuxAlarmApp`: Room load 완료 후 온보딩 또는 저장된 홈으로 라우팅
+- 기존 Lux 다중 알람 DB는 Warmly 시작 경로에서 열지 않는다.
+- 기존 `BootReceiver`와 `RescheduleReceiver`는 manifest에서 비활성화했다.
 
-## Android
+## 다음 슬라이스
 
-- 기반: Lux Alarm 2.4.1 (`147ea5c4ce4ea416a1d02975754cc12496e73433`), GPLv3
-- Kotlin + Jetpack Compose + Room
-- `AlarmManager` 정확 알람으로 램프 시작과 목표 시각 백업을 각각 예약
-- foreground service가 오디오·화면·진동 램프를 한 실행으로 소유
-- 재부팅·시간대 변경·앱 업데이트 후 재예약
-- full-screen alarm Activity에서 sunrise 화면과 종료/Lux 미션 제공
-- 현재 제한: 램프는 알람 목표 시각에 시작하며, 목표 시각 이전 시작 예약은 아직 구현하지 않음
-- 모든 새 기능은 기존 테스트 스위트에 RED→GREEN으로 추가
+1. 로컬 플레이리스트와 앱 관리 음원 사본
+2. 권한별 이유 설명 및 준비 상태
+3. 시험 알람
+4. `AlarmManager`의 램프 시작·목표 시각 백업 예약
+5. foreground service의 빛·음악·진동 실행
+6. `일어났어요` 종료
+7. 재부팅·시간대 변경·앱 업데이트 후 단일 계획 재예약
 
-## iOS
+Room이 권위 상태이며 AlarmManager 등록은 재생성 가능한 projection으로 유지한다.
 
-- SwiftUI + AlarmKit(iOS 26+)
-- AlarmKit 권한, 반복/고정 알람, 잠금화면 알람 UI, 목표 시각 백업을 사용
-- 앱이 전면/bedside 상태일 때 sunrise 화면과 연속 램프를 완전 제공
-- 백그라운드에서 가져온 긴 음악의 연속 점진 재생 가능 범위는 공식 API 검증 결과에 따라 제한을 UI에 명시
-- Android GPL 코드는 복사하지 않고 본 문서의 독립 규격으로 구현
+## 검증 원칙
 
-## 상태 소유권
-
-- 알람 설정·가져온 음원·실행 이력: 각 휴대폰 로컬 앱이 권위자
-- Hermes 연동: 2단계의 선택 기능이며 알람 성공 조건이 아님
-- 스마트 조명: 2단계
-- 건강 추론·수면 진단: 범위 밖
-
-## 검증
-
-### 공통
-- `wake-ramp-test-vectors.json`의 공통 벡터를 Android/iOS 모두 통과
-- 0%, 25%, 50%, 75%, 100% 진행도에서 빛·음량·진동 곡선
-- 시간대/DST/자정 경계와 반복 요일
-- 중복 실행 방지와 `일어났어요` idempotency
-- 가져온 음원 누락 시 기본 소리 fallback
-
-### Android
-- clean unit test + APK build
-- emulator와 Galaxy 실기기에서 앱 종료·화면 잠금·재부팅·Doze 조건
-- 실제 음량/화면/진동 단계와 Lux 종료
-
-### iOS
-- XCTest + simulator build
-- AlarmKit 권한 거부/승인, 예약 read-back
-- iPhone 실기기에서 잠금·무음·집중모드·앱 종료 조건
-- 앱 전면 bedtime 모드와 목표 시각 시스템 fallback 구분
+- 단위·Compose·Room 재개방 테스트
+- lint, release Kotlin compile, Spotless, APK build
+- 실제 예약을 연결한 뒤 Galaxy에서 앱 종료·잠금·재부팅·Doze canary
+- 실제 기기 canary 이전에는 “알람 준비됨” 또는 “예약 완료”라고 표시하지 않는다.

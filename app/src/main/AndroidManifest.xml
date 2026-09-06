@@ -42,6 +42,7 @@
             android:exported="false" />
         <receiver
             android:name=".BootReceiver"
+            android:enabled="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -52,6 +53,7 @@
         <!-- exported: a private receiver is never sent system broadcasts. -->
         <receiver
             android:name=".RescheduleReceiver"
+            android:enabled="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />

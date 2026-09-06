@@ -1,27 +1,26 @@
-# GentleWake · 부드러운 기상
+# Warmly
 
-GentleWake is a 2026 modification of Lux Alarm 2.4.1 by Daniel Salmun. The
-Android code remains licensed under GNU GPLv3; see [LICENSE](LICENSE). Changes
-in this branch add the Korean gentle-wake screen, shared wake-ramp model,
-profile settings, and app-managed local audio import. The Android ramp currently
-starts when the alarm fires and reaches its configured maximum afterward; it is
-not yet scheduled to begin before the target alarm time.
+**부드러운 기상, 기분 좋은 하루.**
 
-![F-Droid Version](https://img.shields.io/f-droid/v/com.dsalmun.luxalarm)
-![Downloads last month](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2Fkitswas%2Ffdroid-metrics-dashboard%2Fraw%2Frefs%2Fheads%2Fmain%2Fprocessed%2Fmonthly%2Fcom.dsalmun.luxalarm.json&query=%24.total_downloads&logo=fdroid&label=Downloads%20last%20month)
+Warmly는 Lux Alarm 2.4.1 by Daniel Salmun을 기반으로 2026년에 수정한 GPLv3 Android 앱입니다. 원 프로젝트와 수정 코드의 라이선스는 [LICENSE](LICENSE), 출처와 수정 범위는 [NOTICE.md](NOTICE.md)를 참고하세요.
 
-[<img src="https://f-droid.org/badge/get-it-on.png"
-    alt="Get it on F-Droid"
-    height="80">](https://f-droid.org/packages/com.dsalmun.luxalarm)
+## 현재 구현된 첫 슬라이스
 
-The upstream **Lux Alarm** behavior is a light-sensitive alarm clock designed to ensure you get out of bed. The alarm remains active until it detects a specific level of ambient light in your room.
+- 실제 기상 시각 선택
+- 일반적인 수면 시간을 참고한 취침 시각 3개 추천
+- 추천 선택 또는 직접 취침 시각 설정
+- Room에 하나의 수면 계획 저장
+- 재실행 시 저장된 계획 홈 요약 표시
+- 첫 화면에서 공개 소스 고지 확인
 
-## How It Works
+## 아직 구현되지 않은 기능
 
-To disable the alarm, you must increase the room's brightness, either by opening your blinds or turning on a light. The app utilizes your phone's built-in **ambient light sensor** to measure the brightness level, preventing you from simply hitting "snooze" while remaining in the dark.
+- 실제 알람 예약과 재부팅 후 재예약
+- 목표 시각 전 빛·음악·진동 램프
+- 목표 시각 백업 알람과 `일어났어요` 종료
+- 로컬 기상 플레이리스트 생성·편집·재생
+- 권한 준비 단계와 시험 알람
 
-## Key Features
+HTML 파일은 제품 UI를 비교하기 위한 상호작용 **시안**입니다. 시안의 조작은 데이터를 저장하거나 알람·오디오를 실행하지 않습니다.
 
-* **Light-Based Deactivation:** The alarm only stops once a pre-defined light threshold is met.
-* **Adjustable Sensitivity:** Customize the required brightness level to account for different environments or weather conditions.
-* **Modern Interface:** A clean, minimal UI built using **Material Design 3**.
+전체 제품 계약과 단계별 범위는 [WARMLY_SOLO.md](WARMLY_SOLO.md)와 [구현 계획](docs/plans/2026-09-06-warmly-solo.md)에 기록되어 있습니다.

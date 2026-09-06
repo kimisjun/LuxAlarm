@@ -1,18 +1,7 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun.
- *
- * Lux Alarm is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Lux Alarm is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Lux Alarm.  If not, see <https://www.gnu.org/licenses/>.
+ * Warmly is a 2026 modification of Lux Alarm, originally authored by Daniel Salmun.
+ * Additional Warmly code and modifications Copyright (C) 2026 김은준.
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.dsalmun.luxalarm
 
@@ -24,7 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.testing.AppContainerTestRule
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -131,20 +120,16 @@ class BootReceiverTest {
         assertEquals(1, repository.scheduleNextAlarmCallCount, "Rescheduling is still harmless")
     }
 
-    /** A misspelled filter compiles fine and silently never fires. */
+    /** Warmly must not re-arm the legacy multi-alarm repository before its scheduler exists. */
     @Test
-    fun theManifestRoutesEveryBootActionToThisReceiver() {
+    fun legacyBootReceiverIsDisabledForTheWarmlyFirstSlice() {
         BOOT_ACTIONS.forEach { action ->
             val resolved =
                 context.packageManager
                     .queryBroadcastReceivers(Intent(action).setPackage(context.packageName), 0)
                     .firstOrNull { it.activityInfo.name == BootReceiver::class.java.name }
 
-            assertNotNull(resolved, "$action must resolve to BootReceiver")
-            assertTrue(
-                resolved.activityInfo.exported,
-                "System broadcasts need an exported receiver",
-            )
+            assertNull(resolved, "$action must not route to the disabled legacy receiver")
         }
     }
 

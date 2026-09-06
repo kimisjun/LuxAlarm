@@ -7,29 +7,26 @@ package com.dsalmun.luxalarm
 
 import android.app.Application
 import androidx.annotation.VisibleForTesting
-import com.dsalmun.luxalarm.data.AlarmDatabase
-import com.dsalmun.luxalarm.data.AlarmRepository
 import com.dsalmun.luxalarm.data.IAlarmRepository
+import com.dsalmun.luxalarm.data.RoomSleepPlanStore
+import com.dsalmun.luxalarm.data.WarmlyDatabase
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 class AppContainer : Application() {
     companion object {
-        lateinit var database: AlarmDatabase
+        /** Legacy runtime seam retained only while reusable alarm components are redesigned. */
         lateinit var repository: IAlarmRepository
         lateinit var settingsManager: SettingsManager
+        lateinit var sleepPlanStore: SleepPlanStore
 
-        /** Backs the work the broadcast receivers start behind `goAsync()`. */
+        /** Backs the work the disabled legacy broadcast receivers use in focused tests. */
         @VisibleForTesting var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
     }
 
     override fun onCreate() {
         super.onCreate()
-        database = AlarmDatabase.getDatabase(this)
-        repository = AlarmRepository(database.alarmDao(), this)
         settingsManager = SettingsManager(this)
-        CoroutineScope(Dispatchers.IO).launch { repository.cancelV1Alarms() }
+        sleepPlanStore = RoomSleepPlanStore(WarmlyDatabase.getDatabase(this).sleepPlanDao())
     }
 }

@@ -1,19 +1,7 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
- * for GentleWake in 2026.
- *
- * Lux Alarm is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Lux Alarm is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Lux Alarm.  If not, see <https://www.gnu.org/licenses/>.
+ * Warmly is a 2026 modification of Lux Alarm, originally authored by Daniel Salmun.
+ * Additional Warmly code and modifications Copyright (C) 2026 김은준.
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.dsalmun.luxalarm
 
@@ -31,14 +19,14 @@ import org.robolectric.annotation.Config
 @Config(application = Application::class)
 class GentleWakeBrandingTest {
     @Test
-    fun appIsKoreanBrandedWhileCreditingTheGplUpstreamAndModification() {
+    fun appIsWarmlyBrandedWhileCreditingTheGplUpstreamAndModification() {
         val context = ApplicationProvider.getApplicationContext<Context>()
 
-        assertEquals("GentleWake · 부드러운 기상", context.getString(R.string.app_name))
+        assertEquals("Warmly", context.getString(R.string.app_name))
         val notice = context.getString(R.string.gpl_modification_notice)
         assertTrue("Lux Alarm 2.4.1" in notice)
         assertTrue("GPLv3" in notice)
-        assertTrue("GentleWake" in notice)
+        assertTrue("Warmly" in notice)
         assertTrue("2026" in notice)
     }
 }

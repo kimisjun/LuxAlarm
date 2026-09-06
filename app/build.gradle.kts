@@ -20,11 +20,11 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.dsalmun.luxalarm"
+        applicationId = "com.kimisjun.warmly"
         minSdk = 28
         targetSdk = 37
-        versionCode = 14
-        versionName = "2.4.1"
+        versionCode = 1
+        versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -1,4 +1,35 @@
 <resources>
-    <string name="app_name">GentleWake · 부드러운 기상</string>
-    <string name="gpl_modification_notice">GentleWake는 Lux Alarm 2.4.1을 기반으로 2026년에 수정된 GPLv3 소프트웨어입니다.</string>
+    <string name="app_name">Warmly</string>
+    <string name="gpl_modification_notice">Warmly is GPLv3 software based on Lux Alarm 2.4.1 and modified in 2026.</string>
+    <string name="warmly_brand">WARMLY</string>
+    <string name="warmly_welcome_title">Wake gently. Start your day warmly.</string>
+    <string name="warmly_welcome_body">Choose tomorrow’s wake time and bedtime now. Alarm, light, music, and vibration are connected in later steps.</string>
+    <string name="warmly_create_first_plan">Create my first sleep plan</string>
+    <string name="warmly_open_source_action">Open-source notice</string>
+    <string name="warmly_open_source_title">Open-source software</string>
+    <string name="warmly_close">Close</string>
+    <string name="warmly_onboarding_step_wake">1 · WAKE TIME</string>
+    <string name="warmly_wake_question">What time do you want to wake up?</string>
+    <string name="warmly_decrease_wake_time">Decrease wake time by 15 minutes</string>
+    <string name="warmly_increase_wake_time">Increase wake time by 15 minutes</string>
+    <string name="warmly_next">Next</string>
+    <string name="warmly_onboarding_step_bedtime">2 · BEDTIME</string>
+    <string name="warmly_bedtime_question">When would you like to go to bed?</string>
+    <string name="warmly_bedtime_note">Suggestions use common sleep durations and include about 15 minutes to fall asleep. Your needs may differ.</string>
+    <string name="warmly_bedtime_nine_hours">About 9 hours of sleep</string>
+    <string name="warmly_bedtime_eight_hours">About 8 hours of sleep</string>
+    <string name="warmly_bedtime_seven_and_half_hours">About 7 hours 30 minutes of sleep</string>
+    <string name="warmly_custom_bedtime">Set a different time</string>
+    <string name="warmly_selected_bedtime">Selected bedtime · %1$s</string>
+    <string name="warmly_onboarding_step_custom_bedtime">2 · CUSTOM BEDTIME</string>
+    <string name="warmly_custom_bedtime_question">Choose your bedtime</string>
+    <string name="warmly_decrease_bedtime">Decrease bedtime by 15 minutes</string>
+    <string name="warmly_increase_bedtime">Increase bedtime by 15 minutes</string>
+    <string name="warmly_minus_15">−15 min</string>
+    <string name="warmly_plus_15">+15 min</string>
+    <string name="warmly_use_this_time">Use this time</string>
+    <string name="warmly_save_sleep_plan">Save this sleep plan</string>
+    <string name="warmly_home_wake_label">Tomorrow’s wake time</string>
+    <string name="warmly_home_bedtime">Bedtime · %1$s</string>
+    <string name="warmly_home_saved_locally">Saved on this device. Alarm scheduling is added in the next slice.</string>
 </resources>
