@@ -24,6 +24,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 internal interface GentleWakePreviewPlayer {
     fun setVolume(volume: Float)
@@ -253,34 +256,39 @@ internal fun GentleWakePreviewRoute(
     playlistId: String? = null,
     legacyImportedPath: String?,
     isLocalFile: (String) -> Boolean,
+    resolutionDispatcher: CoroutineDispatcher = Dispatchers.IO,
     defaultAlarmUri: Uri?,
     playerFactory: GentleWakePreviewPlayerFactory,
     modifier: Modifier = Modifier,
 ) {
     var resolution by
-        remember(playlistStore, playlistId, legacyImportedPath) {
+        remember(playlistStore, playlistId, legacyImportedPath, resolutionDispatcher) {
             mutableStateOf<PreviewAudioResolution>(PreviewAudioResolution.Loading)
         }
 
-    LaunchedEffect(playlistStore, playlistId, legacyImportedPath) {
-        resolution =
+    LaunchedEffect(playlistStore, playlistId, legacyImportedPath, resolutionDispatcher) {
+        val resolved =
             try {
-                val selected =
-                    playlistId?.let { WakePlaylist(it, "") }
-                        ?: playlistStore.selectedPlaylistForWake()
-                val entries = selected?.let { playlistStore.listEntries(it.id) }.orEmpty()
-                val paths = previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
-                PreviewAudioResolution.Ready(
-                    audioUris = paths.mapNotNull { path -> path?.let(::File)?.let(Uri::fromFile) },
-                    allSelectedEntriesMissing =
-                        selected != null &&
-                            entries.any { it.playlistId == selected.id } &&
-                            paths.isEmpty(),
-                )
+                withContext(resolutionDispatcher) {
+                    val selected =
+                        playlistId?.let { WakePlaylist(it, "") }
+                            ?: playlistStore.selectedPlaylistForWake()
+                    val entries = selected?.let { playlistStore.listEntries(it.id) }.orEmpty()
+                    val paths = previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
+                    PreviewAudioResolution.Ready(
+                        audioUris =
+                            paths.mapNotNull { path -> path?.let(::File)?.let(Uri::fromFile) },
+                        allSelectedEntriesMissing =
+                            selected != null &&
+                                entries.any { it.playlistId == selected.id } &&
+                                paths.isEmpty(),
+                    )
+                }
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
                 PreviewAudioResolution.Failed
             }
+        resolution = resolved
     }
 
     when (val current = resolution) {

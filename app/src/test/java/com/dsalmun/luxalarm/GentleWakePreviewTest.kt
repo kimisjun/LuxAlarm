@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -24,9 +25,13 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
 import java.util.Locale
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.asCoroutineDispatcher
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -203,12 +208,73 @@ class GentleWakePreviewTest {
         composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
 
         selection.complete(selected)
-        composeRule.waitForIdle()
+        waitForTextToDisappear("Loading preview audio…")
 
         composeRule.runOnIdle {
             assertEquals(listOf(firstUri), factory.requestedUris)
             assertEquals(1, store.selectionCalls)
             assertEquals(0, globalStore.selectionCalls)
+        }
+    }
+
+    @Test
+    fun availabilityProbesRunOnTheInjectedResolutionDispatcher() {
+        val selected = WakePlaylist("selected", "Morning")
+        val selectedUri = Uri.parse("file:///private/selected")
+        val store =
+            PreviewDeferredPlaylistStore(
+                CompletableDeferred(selected),
+                selected,
+                listOf(
+                    WakePlaylistEntry(
+                        "entry",
+                        selected.id,
+                        WakeTrack("track", "Selected", selectedUri.path!!),
+                        0,
+                    )
+                ),
+            )
+        val factory = PreviewRecordingFactory()
+        val probeThreads = ConcurrentLinkedQueue<String>()
+        val visible = mutableStateOf(true)
+        val resolutionExecutor =
+            Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "preview-resolution-io")
+            }
+        val resolutionDispatcher = resolutionExecutor.asCoroutineDispatcher()
+
+        try {
+            composeRule.setContent {
+                LuxAlarmTheme(dynamicColor = false) {
+                    if (visible.value) {
+                        GentleWakePreviewRoute(
+                            progress = 0f,
+                            onAwake = {},
+                            playlistStore = store,
+                            legacyImportedPath = null,
+                            isLocalFile = { path ->
+                                probeThreads += Thread.currentThread().name
+                                path == selectedUri.path
+                            },
+                            resolutionDispatcher = resolutionDispatcher,
+                            defaultAlarmUri =
+                                Uri.parse("content://settings/system/alarm_alert"),
+                            playerFactory = factory,
+                        )
+                    }
+                }
+            }
+            waitForTextToDisappear("Loading preview audio…")
+
+            composeRule.runOnIdle {
+                assertEquals(listOf(selectedUri), factory.requestedUris)
+                assertEquals(1, probeThreads.size)
+                assertTrue(probeThreads.single().startsWith("preview-resolution-io"))
+                visible.value = false
+            }
+            composeRule.waitForIdle()
+        } finally {
+            resolutionDispatcher.close()
         }
     }
 
@@ -245,7 +311,7 @@ class GentleWakePreviewTest {
                 )
             }
         }
-        composeRule.waitForIdle()
+        waitForTextToDisappear("Loading preview audio…")
 
         composeRule.runOnIdle {
             assertEquals(listOf(editorUri), factory.requestedUris)
@@ -286,7 +352,7 @@ class GentleWakePreviewTest {
                 )
             }
         }
-        composeRule.waitForIdle()
+        waitForText("Playlist audio files are unavailable · Playing default alarm sound")
 
         composeRule
             .onNodeWithText("Playlist audio files are unavailable · Playing default alarm sound")
@@ -313,28 +379,40 @@ class GentleWakePreviewTest {
             )
         val factory = PreviewRecordingFactory()
         val visible = mutableStateOf(true)
+        val resolutionExecutor =
+            Executors.newSingleThreadExecutor { runnable ->
+                Thread(runnable, "cancelled-preview-resolution-io")
+            }
+        val resolutionDispatcher = resolutionExecutor.asCoroutineDispatcher()
 
-        composeRule.setContent {
-            LuxAlarmTheme(dynamicColor = false) {
-                if (visible.value) {
-                    GentleWakePreviewRoute(
-                        progress = 0f,
-                        onAwake = {},
-                        playlistStore = store,
-                        legacyImportedPath = "/private/legacy",
-                        isLocalFile = { true },
-                        defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
-                        playerFactory = factory,
-                    )
+        try {
+            composeRule.setContent {
+                LuxAlarmTheme(dynamicColor = false) {
+                    if (visible.value) {
+                        GentleWakePreviewRoute(
+                            progress = 0f,
+                            onAwake = {},
+                            playlistStore = store,
+                            legacyImportedPath = "/private/legacy",
+                            isLocalFile = { true },
+                            resolutionDispatcher = resolutionDispatcher,
+                            defaultAlarmUri =
+                                Uri.parse("content://settings/system/alarm_alert"),
+                            playerFactory = factory,
+                        )
+                    }
                 }
             }
+
+            composeRule.runOnIdle { visible.value = false }
+            selection.complete(selected)
+            resolutionExecutor.submit {}.get(5, TimeUnit.SECONDS)
+            composeRule.waitForIdle()
+
+            composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
+        } finally {
+            resolutionDispatcher.close()
         }
-
-        composeRule.runOnIdle { visible.value = false }
-        selection.complete(selected)
-        composeRule.waitForIdle()
-
-        composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
     }
 
     @Test
@@ -365,7 +443,7 @@ class GentleWakePreviewTest {
 
         composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
         selection.completeExceptionally(IllegalStateException("database unavailable"))
-        composeRule.waitForIdle()
+        waitForText("Imported music failed · Playing default alarm sound")
 
         composeRule
             .onNodeWithText("Imported music failed · Playing default alarm sound")
@@ -399,7 +477,7 @@ class GentleWakePreviewTest {
         }
 
         selection.completeExceptionally(IllegalStateException("database unavailable"))
-        composeRule.waitForIdle()
+        waitForText("Unable to play preview audio")
 
         composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
         composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
@@ -432,7 +510,7 @@ class GentleWakePreviewTest {
         }
 
         selection.completeExceptionally(IllegalStateException("database unavailable"))
-        composeRule.waitForIdle()
+        waitForText("Unable to play preview audio")
 
         composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
         composeRule.runOnIdle { assertEquals(listOf(defaultUri), factory.requestedUris) }
@@ -465,7 +543,7 @@ class GentleWakePreviewTest {
         }
 
         selection.completeExceptionally(IllegalStateException("database unavailable"))
-        composeRule.waitForIdle()
+        waitForText("Imported music failed · Playing default alarm sound")
         composeRule
             .onNodeWithText("Imported music failed · Playing default alarm sound")
             .assertIsDisplayed()
@@ -580,6 +658,18 @@ class GentleWakePreviewTest {
         }
 
         composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
+    }
+
+    private fun waitForText(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+        }
+    }
+
+    private fun waitForTextToDisappear(text: String) {
+        composeRule.waitUntil(timeoutMillis = 5_000) {
+            composeRule.onAllNodesWithText(text).fetchSemanticsNodes().isEmpty()
+        }
     }
 
     private class PreviewRecordingFactory(
