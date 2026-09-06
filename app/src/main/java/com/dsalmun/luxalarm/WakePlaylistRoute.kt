@@ -165,9 +165,7 @@ fun WakePlaylistRoute(
         )
 
         if (routeState.busy) {
-            CircularProgressIndicator(
-                modifier = Modifier.align(Alignment.TopEnd).padding(24.dp)
-            )
+            CircularProgressIndicator(modifier = Modifier.align(Alignment.TopEnd).padding(24.dp))
         }
         routeState.error?.let { error ->
             Text(
@@ -181,7 +179,8 @@ fun WakePlaylistRoute(
             PlaylistNameDialog(
                 title =
                     stringResource(
-                        if (dialog is PlaylistNameDialogState.Create) R.string.warmly_playlist_create
+                        if (dialog is PlaylistNameDialogState.Create)
+                            R.string.warmly_playlist_create
                         else R.string.warmly_playlist_rename
                     ),
                 value = dialog.name,
@@ -217,8 +216,7 @@ fun WakePlaylistRoute(
 
 private class WakePlaylistViewModelFactory(
     private val playlistStore: WakePlaylistStore,
-    private val importDocuments:
-        suspend (String, List<String>) -> List<WakePlaylistImportResult>,
+    private val importDocuments: suspend (String, List<String>) -> List<WakePlaylistImportResult>,
     private val ownedFileExists: suspend (String) -> Boolean,
     private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
 ) : ViewModelProvider.Factory {
@@ -231,7 +229,8 @@ private class WakePlaylistViewModelFactory(
             importDocuments = importDocuments,
             ownedFileExists = ownedFileExists,
             deleteOwnedBytes = deleteOwnedBytes,
-        ) as T
+        )
+            as T
     }
 }
 

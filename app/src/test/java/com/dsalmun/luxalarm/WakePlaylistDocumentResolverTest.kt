@@ -17,7 +17,9 @@ import org.junit.Test
 class WakePlaylistDocumentResolverTest {
     @Test
     fun allDocumentAndOwnedFileOperationsUseInjectedIoDispatcher() {
-        val executor = Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "resolver-io") }
+        val executor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "resolver-io")
+        }
         val dispatcher = executor.asCoroutineDispatcher()
         val threads = mutableListOf<String>()
         val store = ResolverPlaylistStore()
@@ -61,19 +63,34 @@ class WakePlaylistDocumentResolverTest {
 
 private class ResolverPlaylistStore : WakePlaylistStore {
     val registrationThreads = mutableListOf<String>()
+
     override suspend fun createPlaylist(name: String) = error("unused")
+
     override suspend fun listPlaylists(): List<WakePlaylist> = emptyList()
+
     override suspend fun renamePlaylist(playlistId: String, name: String) = Unit
+
     override suspend fun selectPlaylistForWake(playlistId: String) = Unit
+
     override suspend fun selectedPlaylistForWake(): WakePlaylist? = null
+
     override suspend fun addTrackToLibrary(title: String, storedPath: String) = error("unused")
-    override suspend fun registerTrackInPlaylist(playlistId: String, track: WakeTrack): WakePlaylistRegistration {
+
+    override suspend fun registerTrackInPlaylist(
+        playlistId: String,
+        track: WakeTrack,
+    ): WakePlaylistRegistration {
         registrationThreads += Thread.currentThread().name
         return WakePlaylistRegistration.Added(WakePlaylistEntry("entry", playlistId, track, 0))
     }
+
     override suspend fun listLibraryTracks(): List<WakeTrack> = emptyList()
+
     override suspend fun addTrack(playlistId: String, trackId: String) = error("unused")
+
     override suspend fun removeTrack(playlistId: String, trackId: String) = Unit
+
     override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) = Unit
+
     override suspend fun listEntries(playlistId: String): List<WakePlaylistEntry> = emptyList()
 }

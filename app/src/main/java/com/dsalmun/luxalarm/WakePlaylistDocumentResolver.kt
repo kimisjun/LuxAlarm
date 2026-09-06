@@ -27,7 +27,9 @@ class WakePlaylistDocumentResolver(
     beforeImport: suspend () -> Unit = {},
     fallbackTitle: String = "Imported audio",
 ) {
-    private val audioStore = providedAudioStore ?: WakeAudioStore(storageDirectory, openDocument)
+    private val audioStore =
+        providedAudioStore
+            ?: WakeAudioStore(storageDirectory = storageDirectory, openDocument = openDocument)
     private val importer =
         WakePlaylistImporter(
             localTrackImporter = LocalTrackImporter(audioStore, mimeTypeFor),
@@ -50,7 +52,9 @@ class WakePlaylistDocumentResolver(
 
     suspend fun deleteOwnedBytes(track: WakeTrack): Boolean =
         withContext(ioDispatcher) {
-            audioStore.deleteOwnedBytes(WakeAudioStore.OwnedTrack(track.id, track.id, track.storedPath))
+            audioStore.deleteOwnedBytes(
+                WakeAudioStore.OwnedTrack(track.id, track.id, track.storedPath)
+            )
         }
 
     companion object {

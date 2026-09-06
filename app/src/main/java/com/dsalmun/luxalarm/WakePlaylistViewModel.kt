@@ -57,8 +57,7 @@ data class WakePlaylistRouteState(
 class WakePlaylistViewModel(
     private val savedStateHandle: SavedStateHandle,
     private val playlistStore: WakePlaylistStore,
-    private val importDocuments:
-        suspend (String, List<String>) -> List<WakePlaylistImportResult>,
+    private val importDocuments: suspend (String, List<String>) -> List<WakePlaylistImportResult>,
     private val ownedFileExists: suspend (String) -> Boolean,
     private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
 ) : ViewModel() {
@@ -100,7 +99,8 @@ class WakePlaylistViewModel(
     }
 
     fun showRenameDialog(playlistId: String) {
-        val name = _state.value.screen.playlists.singleOrNull { it.id == playlistId }?.name ?: return
+        val name =
+            _state.value.screen.playlists.singleOrNull { it.id == playlistId }?.name ?: return
         setNameDialog(PlaylistNameDialogState.Rename(playlistId, name))
     }
 
@@ -230,8 +230,7 @@ class WakePlaylistViewModel(
         operation: PendingPickerOperation.Replace,
         results: List<WakePlaylistImportResult>,
     ) {
-        val replacementAdded =
-            results.singleOrNull() as? WakePlaylistImportResult.Added ?: return
+        val replacementAdded = results.singleOrNull() as? WakePlaylistImportResult.Added ?: return
         if (replacementAdded.ownedTrack.id != operation.oldTrackId) {
             playlistStore.removeTrack(operation.playlistId, operation.oldTrackId)
         }
@@ -249,24 +248,23 @@ class WakePlaylistViewModel(
         val playlists = playlistStore.listPlaylists()
         val selected = playlistStore.selectedPlaylistForWake()
         val editorPlaylist = editorId?.let { id -> playlists.singleOrNull { it.id == id } }
-        val editor =
-            editorPlaylist?.let { playlist ->
-                WakePlaylistEditorUi(
-                    id = playlist.id,
-                    name = playlist.name,
-                    tracks =
-                        playlistStore
-                            .listEntries(playlist.id)
-                            .sortedBy(WakePlaylistEntry::position)
-                            .map { entry ->
-                                WakePlaylistTrackUi(
-                                    id = entry.track.id,
-                                    title = entry.track.title,
-                                    isMissing = !ownedFileExists(entry.track.storedPath),
-                                )
-                            },
-                )
-            }
+        val editor = editorPlaylist?.let { playlist ->
+            WakePlaylistEditorUi(
+                id = playlist.id,
+                name = playlist.name,
+                tracks =
+                    playlistStore
+                        .listEntries(playlist.id)
+                        .sortedBy(WakePlaylistEntry::position)
+                        .map { entry ->
+                            WakePlaylistTrackUi(
+                                id = entry.track.id,
+                                title = entry.track.title,
+                                isMissing = !ownedFileExists(entry.track.storedPath),
+                            )
+                        },
+            )
+        }
         _state.value =
             _state.value.copy(
                 screen =
@@ -310,8 +308,7 @@ class WakePlaylistViewModel(
 
     private fun restoredNameDialog(): PlaylistNameDialogState? =
         when (savedStateHandle.get<String>(KEY_DIALOG_KIND)) {
-            DIALOG_CREATE ->
-                PlaylistNameDialogState.Create(savedStateHandle[KEY_DIALOG_NAME] ?: "")
+            DIALOG_CREATE -> PlaylistNameDialogState.Create(savedStateHandle[KEY_DIALOG_NAME] ?: "")
             DIALOG_RENAME -> {
                 val playlistId = savedStateHandle.get<String>(KEY_DIALOG_PLAYLIST_ID)
                 playlistId?.let {
