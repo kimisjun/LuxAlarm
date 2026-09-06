@@ -63,7 +63,7 @@
     <string name="warmly_playlist_delete_owned_audio">소유한 오디오 삭제</string>
     <string name="warmly_playlist_delete_description">소유한 오디오 %1$s 삭제</string>
     <string name="warmly_playlist_delete_confirm_title">소유한 오디오를 삭제할까요?</string>
-    <string name="warmly_playlist_delete_confirm_body">플레이리스트 항목은 그대로 두고 앱이 보관한 오디오 사본만 삭제합니다.</string>
+    <string name="warmly_playlist_delete_confirm_body">플레이리스트 항목은 그대로 남지만, 앱이 소유한 이 오디오 파일을 삭제하면 모든 플레이리스트에서 사용할 수 없게 될 수 있습니다.</string>
     <string name="warmly_playlist_delete_confirm">삭제</string>
     <string name="warmly_playlist_delete_failed">오디오를 삭제하지 못했어요. 다시 시도해 주세요.</string>
     <string name="warmly_playlist_save_failed">플레이리스트 변경사항을 저장하지 못했어요. 다시 시도해 주세요.</string>
@@ -78,6 +78,7 @@
     <string name="warmly_preview_awake">일어났어요</string>
     <string name="warmly_preview_loading">미리보기 오디오 불러오는 중…</string>
     <string name="warmly_preview_fallback">가져온 음악 재생 실패 · 기본 알람 소리 재생 중</string>
+    <string name="warmly_preview_missing_fallback">플레이리스트 오디오 파일을 사용할 수 없음 · 기본 알람 소리 재생 중</string>
     <string name="warmly_preview_failed">미리보기 소리를 재생할 수 없어요</string>
     <string name="warmly_back">뒤로</string>
 </resources>

@@ -97,6 +97,21 @@ class GentleWakePreviewTest {
     }
 
     @Test
+    fun missingPlaylistFallbackHasAKoreanTranslation() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configuration =
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocale(Locale.KOREAN)
+            }
+        val localized = context.createConfigurationContext(configuration)
+
+        assertEquals(
+            "플레이리스트 오디오 파일을 사용할 수 없음 · 기본 알람 소리 재생 중",
+            localized.getString(R.string.warmly_preview_missing_fallback),
+        )
+    }
+
+    @Test
     fun progressControlScrubsThroughDeterministicRampFrames() {
         val progress = mutableFloatStateOf(0f)
         composeRule.setContent {
@@ -236,6 +251,47 @@ class GentleWakePreviewTest {
             assertEquals(listOf(editorUri), factory.requestedUris)
             assertEquals(0, store.selectionCalls)
         }
+    }
+
+    @Test
+    fun selectedPlaylistWithOnlyMissingFilesPlaysDefaultWithTruthfulFallbackStatus() {
+        val selected = WakePlaylist("selected", "Morning")
+        val missingPath = "/private/missing"
+        val store =
+            PreviewDeferredPlaylistStore(
+                CompletableDeferred(selected),
+                selected,
+                listOf(
+                    WakePlaylistEntry(
+                        "entry",
+                        selected.id,
+                        WakeTrack("track", "Missing", missingPath),
+                        0,
+                    )
+                ),
+            )
+        val defaultUri = Uri.parse("content://settings/system/alarm_alert")
+        val factory = PreviewRecordingFactory()
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = null,
+                    isLocalFile = { it != missingPath },
+                    defaultAlarmUri = defaultUri,
+                    playerFactory = factory,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule
+            .onNodeWithText("Playlist audio files are unavailable · Playing default alarm sound")
+            .assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(listOf(defaultUri), factory.requestedUris) }
     }
 
     @Test

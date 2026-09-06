@@ -63,7 +63,7 @@
     <string name="warmly_playlist_delete_owned_audio">Delete owned audio</string>
     <string name="warmly_playlist_delete_description">Delete owned audio %1$s</string>
     <string name="warmly_playlist_delete_confirm_title">Delete owned audio?</string>
-    <string name="warmly_playlist_delete_confirm_body">The playlist entry stays visible, but the app-owned audio copy will be removed.</string>
+    <string name="warmly_playlist_delete_confirm_body">The playlist entry stays visible, but deleting this app-owned audio file can make it unavailable in every playlist.</string>
     <string name="warmly_playlist_delete_confirm">Delete</string>
     <string name="warmly_playlist_delete_failed">The owned audio could not be deleted. Try again.</string>
     <string name="warmly_playlist_save_failed">The playlist change could not be saved. Try again.</string>
@@ -78,6 +78,7 @@
     <string name="warmly_preview_awake">I\'m awake</string>
     <string name="warmly_preview_loading">Loading preview audio…</string>
     <string name="warmly_preview_fallback">Imported music failed · Playing default alarm sound</string>
+    <string name="warmly_preview_missing_fallback">Playlist audio files are unavailable · Playing default alarm sound</string>
     <string name="warmly_preview_failed">Unable to play preview audio</string>
     <string name="warmly_back">Back</string>
 </resources>

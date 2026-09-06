@@ -107,6 +107,35 @@ class WakePlaylistRouteTest {
     }
 
     @Test
+    fun deleteConfirmationWarnsThatSharedAudioCanDisappearFromEveryPlaylist() {
+        val track = WakeTrack("shared", "Shared song", "/owned/shared")
+        val store =
+            FakeWakePlaylistStore(
+                initialPlaylists = listOf(WakePlaylist("morning", "Morning")),
+                initialEntries = listOf(WakePlaylistEntry("entry", "morning", track, 0)),
+            )
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                WakePlaylistRoute(
+                    playlistStore = store,
+                    ownedFileExists = { true },
+                    usePlatformNameDialog = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Edit").performClick()
+        composeRule.onNodeWithContentDescription("Delete owned audio Shared song").performClick()
+
+        composeRule
+            .onNodeWithText(
+                "The playlist entry stays visible, but deleting this app-owned audio file " +
+                    "can make it unavailable in every playlist."
+            )
+            .assertIsDisplayed()
+    }
+
+    @Test
     fun editorPreviewDoesNotMutatePersistedSelectionBeforeOpening() {
         val store =
             FakeWakePlaylistStore(

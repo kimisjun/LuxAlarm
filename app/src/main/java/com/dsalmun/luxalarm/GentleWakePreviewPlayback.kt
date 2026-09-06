@@ -56,7 +56,10 @@ internal sealed interface GentleWakePreviewPlaybackState {
 private sealed interface PreviewAudioResolution {
     data object Loading : PreviewAudioResolution
 
-    data class Ready(val audioUris: List<Uri>) : PreviewAudioResolution
+    data class Ready(
+        val audioUris: List<Uri>,
+        val allSelectedEntriesMissing: Boolean = false,
+    ) : PreviewAudioResolution
 
     data object Failed : PreviewAudioResolution
 }
@@ -268,7 +271,11 @@ internal fun GentleWakePreviewRoute(
                 val entries = selected?.let { playlistStore.listEntries(it.id) }.orEmpty()
                 val paths = previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
                 PreviewAudioResolution.Ready(
-                    paths.mapNotNull { path -> path?.let(::File)?.let(Uri::fromFile) }
+                    audioUris = paths.mapNotNull { path -> path?.let(::File)?.let(Uri::fromFile) },
+                    allSelectedEntriesMissing =
+                        selected != null &&
+                            entries.any { it.playlistId == selected.id } &&
+                            paths.isEmpty(),
                 )
             } catch (error: Exception) {
                 if (error is CancellationException) throw error
@@ -293,6 +300,12 @@ internal fun GentleWakePreviewRoute(
                 playlistAudioUris = current.audioUris,
                 defaultAlarmUri = defaultAlarmUri,
                 playerFactory = playerFactory,
+                statusOverride =
+                    if (current.allSelectedEntriesMissing) {
+                        stringResource(R.string.warmly_preview_missing_fallback)
+                    } else {
+                        null
+                    },
                 modifier = modifier,
             )
         PreviewAudioResolution.Failed ->

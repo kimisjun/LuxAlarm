@@ -50,6 +50,21 @@ class WakePlaylistScreenTest {
     }
 
     @Test
+    fun koreanDeleteConfirmationWarnsAboutEveryPlaylist() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configuration =
+            Configuration(context.resources.configuration).apply {
+                setLocale(Locale.KOREAN)
+            }
+        val localized = context.createConfigurationContext(configuration)
+
+        assertEquals(
+            "플레이리스트 항목은 그대로 남지만, 앱이 소유한 이 오디오 파일을 삭제하면 " + "모든 플레이리스트에서 사용할 수 없게 될 수 있습니다.",
+            localized.getString(R.string.warmly_playlist_delete_confirm_body),
+        )
+    }
+
+    @Test
     fun primaryActionRemainsReachableAt390By844WithLargeText() {
         var createCalls = 0
         composeRule.setContent {
