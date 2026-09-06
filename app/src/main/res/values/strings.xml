@@ -32,12 +32,19 @@
     <string name="warmly_home_wake_label">Tomorrow’s wake time</string>
     <string name="warmly_home_bedtime">Bedtime · %1$s</string>
     <string name="warmly_home_saved_locally">Saved on this device. Alarm scheduling is added in the next slice.</string>
+    <string name="warmly_home_music">Music</string>
+    <string name="warmly_home_selected_playlist">Wake music · %1$s</string>
+    <string name="warmly_home_default_sound">Wake music · Default alarm sound</string>
     <string name="warmly_playlist_empty">No playlists yet</string>
     <string name="warmly_playlist_create">Create playlist</string>
+    <string name="warmly_playlist_name">Playlist name</string>
+    <string name="warmly_playlist_create_confirm">Create</string>
+    <string name="warmly_cancel">Cancel</string>
     <string name="warmly_playlist_title">Wake playlists</string>
     <string name="warmly_playlist_selected_for_wake">Selected for wake</string>
     <string name="warmly_playlist_use_for_wake">Use for wake</string>
     <string name="warmly_playlist_rename">Rename</string>
+    <string name="warmly_playlist_rename_confirm">Save</string>
     <string name="warmly_playlist_rename_description">Rename %1$s</string>
     <string name="warmly_playlist_edit">Edit</string>
     <string name="warmly_playlist_edit_description">Edit %1$s</string>
@@ -56,4 +63,7 @@
     <string name="warmly_playlist_delete_owned_audio">Delete owned audio</string>
     <string name="warmly_playlist_delete_description">Delete owned audio %1$s</string>
     <string name="warmly_playlist_import_summary">Import results · Added: %1$d · Duplicates: %2$d · Unsupported: %3$d · Failed: %4$d</string>
+    <string name="warmly_playlist_import_songs">Import songs</string>
+    <string name="warmly_playlist_preview">Preview wake</string>
+    <string name="warmly_back">Back</string>
 </resources>

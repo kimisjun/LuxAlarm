@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,13 +31,19 @@ import kotlinx.coroutines.launch
 
 /** Warmly Solo routes one durable plan to either onboarding or its compact home summary. */
 @Composable
-fun LuxAlarmApp(sleepPlanStore: SleepPlanStore = AppContainer.sleepPlanStore) {
+fun LuxAlarmApp(
+    sleepPlanStore: SleepPlanStore = AppContainer.sleepPlanStore,
+    wakePlaylistStore: WakePlaylistStore = AppContainer.wakePlaylistStore,
+) {
     var loaded by remember(sleepPlanStore) { mutableStateOf(false) }
     var sleepPlan by remember(sleepPlanStore) { mutableStateOf<SleepPlan?>(null) }
+    var selectedPlaylist by remember(wakePlaylistStore) { mutableStateOf<WakePlaylist?>(null) }
     val scope = rememberCoroutineScope()
+    var showMusic by remember { mutableStateOf(false) }
 
     LaunchedEffect(sleepPlanStore) {
         sleepPlan = sleepPlanStore.load()
+        selectedPlaylist = wakePlaylistStore.selectedPlaylistForWake()
         loaded = true
     }
 
@@ -52,12 +59,27 @@ fun LuxAlarmApp(sleepPlanStore: SleepPlanStore = AppContainer.sleepPlanStore) {
                     sleepPlan = completed
                 }
             }
-        else -> WarmlyHomeScreen(checkNotNull(sleepPlan))
+        showMusic ->
+            WakePlaylistRoute(
+                playlistStore = wakePlaylistStore,
+                onBack = { showMusic = false },
+                onSelectionChanged = { selectedPlaylist = it },
+            )
+        else ->
+            WarmlyHomeScreen(
+                plan = checkNotNull(sleepPlan),
+                selectedPlaylist = selectedPlaylist,
+                onOpenMusic = { showMusic = true },
+            )
     }
 }
 
 @Composable
-private fun WarmlyHomeScreen(plan: SleepPlan) {
+private fun WarmlyHomeScreen(
+    plan: SleepPlan,
+    selectedPlaylist: WakePlaylist?,
+    onOpenMusic: () -> Unit,
+) {
     val context = LocalContext.current
     val wake = formatWarmlyTime(context, plan.wakeMinutes)
     val bedtime = formatWarmlyTime(context, plan.bedtimeMinutes)
@@ -79,5 +101,11 @@ private fun WarmlyHomeScreen(plan: SleepPlan) {
             stringResource(R.string.warmly_home_saved_locally),
             style = MaterialTheme.typography.bodyMedium,
         )
+        Text(
+            selectedPlaylist?.let {
+                stringResource(R.string.warmly_home_selected_playlist, it.name)
+            } ?: stringResource(R.string.warmly_home_default_sound)
+        )
+        Button(onClick = onOpenMusic) { Text(stringResource(R.string.warmly_home_music)) }
     }
 }

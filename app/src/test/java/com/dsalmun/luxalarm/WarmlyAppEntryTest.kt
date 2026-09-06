@@ -56,6 +56,38 @@ class WarmlyAppEntryTest {
     }
 
     @Test
+    fun homeSummarizesTheSelectedWakePlaylist() {
+        val playlistStore =
+            FakeAppWakePlaylistStore(
+                playlists = listOf(WakePlaylist("morning", "Morning calm")),
+                selectedId = "morning",
+            )
+        setContent(
+            FakeSleepPlanStore(SleepPlan(7 * 60, 23 * 60, -1)),
+            playlistStore,
+        )
+
+        composeRule.onNodeWithText("Wake music · Morning calm").assertIsDisplayed()
+    }
+
+    @Test
+    fun savedPlanOpensTheMusicPlaylistRoute() {
+        setContent(
+            FakeSleepPlanStore(
+                SleepPlan(
+                    wakeMinutes = 7 * 60 + 15,
+                    bedtimeMinutes = 23 * 60,
+                    bedtimeDayOffset = -1,
+                )
+            )
+        )
+
+        composeRule.onNodeWithText("Music").performClick()
+
+        composeRule.onNodeWithText("Wake playlists").assertIsDisplayed()
+    }
+
+    @Test
     fun completingOnboardingSavesAndShowsHome() {
         val store = FakeSleepPlanStore()
         setContent(store)
@@ -70,9 +102,46 @@ class WarmlyAppEntryTest {
         composeRule.onNodeWithText("Bedtime · 22:45").assertIsDisplayed()
     }
 
-    private fun setContent(store: SleepPlanStore) {
-        composeRule.setContent { LuxAlarmTheme(dynamicColor = false) { LuxAlarmApp(store) } }
+    private fun setContent(
+        store: SleepPlanStore,
+        playlistStore: WakePlaylistStore = FakeAppWakePlaylistStore(),
+    ) {
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) { LuxAlarmApp(store, playlistStore) }
+        }
     }
+}
+
+private class FakeAppWakePlaylistStore(
+    private val playlists: List<WakePlaylist> = emptyList(),
+    private var selectedId: String? = null,
+) : WakePlaylistStore {
+    override suspend fun createPlaylist(name: String) = error("Not needed")
+
+    override suspend fun listPlaylists() = playlists
+
+    override suspend fun renamePlaylist(playlistId: String, name: String) = Unit
+
+    override suspend fun selectPlaylistForWake(playlistId: String) {
+        selectedId = playlistId
+    }
+
+    override suspend fun selectedPlaylistForWake() = playlists.singleOrNull { it.id == selectedId }
+
+    override suspend fun addTrackToLibrary(title: String, storedPath: String) = error("Not needed")
+
+    override suspend fun registerTrackInPlaylist(playlistId: String, track: WakeTrack) =
+        error("Not needed")
+
+    override suspend fun listLibraryTracks() = emptyList<WakeTrack>()
+
+    override suspend fun addTrack(playlistId: String, trackId: String) = error("Not needed")
+
+    override suspend fun removeTrack(playlistId: String, trackId: String) = Unit
+
+    override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) = Unit
+
+    override suspend fun listEntries(playlistId: String) = emptyList<WakePlaylistEntry>()
 }
 
 private class FakeSleepPlanStore(initial: SleepPlan? = null) : SleepPlanStore {

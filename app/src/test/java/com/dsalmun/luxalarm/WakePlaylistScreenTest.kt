@@ -292,6 +292,23 @@ class WakePlaylistScreenTest {
     }
 
     @Test
+    fun editorOffersAProminentMultiTrackImportAction() {
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                WakePlaylistScreen(
+                    state =
+                        WakePlaylistScreenState(
+                            editor = WakePlaylistEditorUi("morning", "Morning", emptyList())
+                        ),
+                    onCreatePlaylist = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Import songs").assertIsDisplayed()
+    }
+
+    @Test
     fun emptyCatalogOffersPlaylistCreation() {
         var createCalls = 0
         composeRule.setContent {

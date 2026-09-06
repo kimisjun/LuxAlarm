@@ -71,8 +71,11 @@ fun WakePlaylistScreen(
     onMoveTrackDown: (String) -> Unit = {},
     onRemoveFromPlaylist: (String) -> Unit = {},
     onDeleteOwnedAudio: (String) -> Unit = {},
+    onImportTracks: () -> Unit = {},
     onFindMissingTrack: (String) -> Unit = {},
     onReplaceMissingTrack: (String) -> Unit = {},
+    onBack: () -> Unit = {},
+    onPreview: () -> Unit = {},
 ) {
     Column(
         modifier =
@@ -83,6 +86,7 @@ fun WakePlaylistScreen(
                 .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        TextButton(onClick = onBack) { Text(stringResource(R.string.warmly_back)) }
         state.editor?.let { editor ->
             PlaylistEditor(
                 editor = editor,
@@ -91,8 +95,10 @@ fun WakePlaylistScreen(
                 onMoveTrackDown = onMoveTrackDown,
                 onRemoveFromPlaylist = onRemoveFromPlaylist,
                 onDeleteOwnedAudio = onDeleteOwnedAudio,
+                onImportTracks = onImportTracks,
                 onFindMissingTrack = onFindMissingTrack,
                 onReplaceMissingTrack = onReplaceMissingTrack,
+                onPreview = onPreview,
             )
         }
             ?: PlaylistCatalog(
@@ -101,6 +107,7 @@ fun WakePlaylistScreen(
                 onSelectForWake,
                 onRenamePlaylist,
                 onEditPlaylist,
+                onPreview,
             )
         state.importSummary?.let { ImportSummary(it) }
     }
@@ -113,6 +120,7 @@ private fun PlaylistCatalog(
     onSelectForWake: (String) -> Unit,
     onRenamePlaylist: (String) -> Unit,
     onEditPlaylist: (String) -> Unit,
+    onPreview: () -> Unit,
 ) {
     Text(
         text = stringResource(R.string.warmly_playlist_title),
@@ -159,6 +167,13 @@ private fun PlaylistCatalog(
     Button(onClick = onCreatePlaylist, modifier = Modifier.fillMaxWidth()) {
         Text(stringResource(R.string.warmly_playlist_create))
     }
+    Button(
+        onClick = onPreview,
+        enabled = state.selectedForWakeId != null,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(stringResource(R.string.warmly_playlist_preview))
+    }
 }
 
 @Composable
@@ -180,11 +195,19 @@ private fun PlaylistEditor(
     onMoveTrackDown: (String) -> Unit,
     onRemoveFromPlaylist: (String) -> Unit,
     onDeleteOwnedAudio: (String) -> Unit,
+    onImportTracks: () -> Unit,
     onFindMissingTrack: (String) -> Unit,
     onReplaceMissingTrack: (String) -> Unit,
+    onPreview: () -> Unit,
 ) {
     Text(editor.name, style = MaterialTheme.typography.headlineMedium)
     RenameButton(WakePlaylistItemUi(editor.id, editor.name), onRenamePlaylist)
+    Button(onClick = onImportTracks, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.warmly_playlist_import_songs))
+    }
+    Button(onClick = onPreview, modifier = Modifier.fillMaxWidth()) {
+        Text(stringResource(R.string.warmly_playlist_preview))
+    }
     editor.tracks.forEachIndexed { index, track ->
         TrackCard(
             track = track,
