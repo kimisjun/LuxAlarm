@@ -9,9 +9,13 @@ import android.app.Application
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.dsalmun.luxalarm.AppContainer
+import com.dsalmun.luxalarm.WakePlaylistRegistration
+import com.dsalmun.luxalarm.WakeTrack
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
+import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -100,6 +104,57 @@ class RoomWakePlaylistStoreTest {
         )
         UUID.fromString(birds.id)
         UUID.fromString(firstEntry.id)
+        database.close()
+    }
+
+    @Test
+    fun importedTrackRegistrationUsesTheStableContentId() = runTest {
+        val database = open()
+        val store = RoomWakePlaylistStore(database)
+        val playlist = store.createPlaylist("Morning")
+        val imported =
+            WakeTrack(
+                id = "stable-sha-256",
+                title = "Birdsong.mp3",
+                storedPath = "/owned/tracks/stable-sha-256",
+            )
+
+        val registration = store.registerTrackInPlaylist(playlist.id, imported)
+
+        assertIs<WakePlaylistRegistration.Added>(registration)
+        assertEquals(imported, registration.entry.track)
+        assertEquals(listOf(imported), store.listLibraryTracks())
+        assertEquals(listOf(imported), store.listEntries(playlist.id).map { it.track })
+        database.close()
+    }
+
+    @Test
+    fun repeatedStableTrackRegistrationReportsExistingMembership() = runTest {
+        val database = open()
+        val store = RoomWakePlaylistStore(database)
+        val playlist = store.createPlaylist("Morning")
+        val original = WakeTrack("same-content", "Original name", "/owned/same-content")
+        val renamedDocument = original.copy(title = "Renamed document")
+        val first = store.registerTrackInPlaylist(playlist.id, original)
+
+        val repeated = store.registerTrackInPlaylist(playlist.id, renamedDocument)
+
+        assertIs<WakePlaylistRegistration.AlreadyPresent>(repeated)
+        assertEquals(first.entry, repeated.entry)
+        assertEquals(listOf(original), store.listLibraryTracks())
+        assertEquals(listOf(original), store.listEntries(playlist.id).map { it.track })
+        database.close()
+    }
+
+    @Test
+    fun failedMembershipInsertRollsBackNewLibraryMetadata() = runTest {
+        val database = open()
+        val store = RoomWakePlaylistStore(database)
+        val imported = WakeTrack("stable-id", "Birdsong", "/owned/stable-id")
+
+        assertFails { store.registerTrackInPlaylist("missing-playlist", imported) }
+
+        assertEquals(emptyList(), store.listLibraryTracks())
         database.close()
     }
 

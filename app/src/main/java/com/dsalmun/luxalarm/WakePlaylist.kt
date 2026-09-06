@@ -16,6 +16,14 @@ data class WakePlaylistEntry(
     val position: Int,
 )
 
+sealed interface WakePlaylistRegistration {
+    val entry: WakePlaylistEntry
+
+    data class Added(override val entry: WakePlaylistEntry) : WakePlaylistRegistration
+
+    data class AlreadyPresent(override val entry: WakePlaylistEntry) : WakePlaylistRegistration
+}
+
 interface WakePlaylistStore {
     suspend fun createPlaylist(name: String): WakePlaylist
 
@@ -28,6 +36,11 @@ interface WakePlaylistStore {
     suspend fun selectedPlaylistForWake(): WakePlaylist?
 
     suspend fun addTrackToLibrary(title: String, storedPath: String): WakeTrack
+
+    suspend fun registerTrackInPlaylist(
+        playlistId: String,
+        track: WakeTrack,
+    ): WakePlaylistRegistration
 
     suspend fun listLibraryTracks(): List<WakeTrack>
 

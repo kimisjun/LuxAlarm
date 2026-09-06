@@ -16,6 +16,7 @@ import androidx.room.Query
 import androidx.room.withTransaction
 import com.dsalmun.luxalarm.WakePlaylist
 import com.dsalmun.luxalarm.WakePlaylistEntry
+import com.dsalmun.luxalarm.WakePlaylistRegistration
 import com.dsalmun.luxalarm.WakePlaylistStore
 import com.dsalmun.luxalarm.WakeTrack
 import java.util.UUID
@@ -115,7 +116,11 @@ interface WakePlaylistDao {
     )
     suspend fun selectedPlaylist(): WakePlaylistEntity?
 
-    @Insert suspend fun insertTrack(track: WakeTrackEntity)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertTrackIfAbsent(track: WakeTrackEntity): Long
+
+    @Query("SELECT * FROM wake_tracks WHERE id = :trackId")
+    suspend fun track(trackId: String): WakeTrackEntity?
 
     @Query("SELECT * FROM wake_tracks ORDER BY rowid")
     suspend fun listTracks(): List<WakeTrackEntity>
@@ -190,8 +195,33 @@ class RoomWakePlaylistStore(
 
     override suspend fun addTrackToLibrary(title: String, storedPath: String): WakeTrack {
         val track = WakeTrack(id = newId(), title = title, storedPath = storedPath)
-        dao.insertTrack(WakeTrackEntity(track.id, track.title, track.storedPath))
+        dao.insertTrackIfAbsent(WakeTrackEntity(track.id, track.title, track.storedPath))
         return track
+    }
+
+    override suspend fun registerTrackInPlaylist(
+        playlistId: String,
+        track: WakeTrack,
+    ): WakePlaylistRegistration = database.withTransaction {
+        dao.insertTrackIfAbsent(WakeTrackEntity(track.id, track.title, track.storedPath))
+        val libraryTrack = requireNotNull(dao.track(track.id)).toModel()
+        val existing =
+            dao.listEntries(playlistId).singleOrNull { it.trackId == track.id }?.toModel()
+        if (existing != null) {
+            WakePlaylistRegistration.AlreadyPresent(existing)
+        } else {
+            val entity =
+                WakePlaylistEntryEntity(
+                    id = newId(),
+                    playlistId = playlistId,
+                    trackId = libraryTrack.id,
+                    position = dao.entryCount(playlistId),
+                )
+            dao.insertEntry(entity)
+            WakePlaylistRegistration.Added(
+                dao.listEntries(playlistId).single { it.entryId == entity.id }.toModel()
+            )
+        }
     }
 
     override suspend fun listLibraryTracks(): List<WakeTrack> =
@@ -249,6 +279,9 @@ class RoomWakePlaylistStore(
 
     override suspend fun listEntries(playlistId: String): List<WakePlaylistEntry> =
         dao.listEntries(playlistId).map { it.toModel() }
+
+    private fun WakeTrackEntity.toModel() =
+        WakeTrack(id = id, title = title, storedPath = storedPath)
 
     private fun WakePlaylistEntryRow.toModel() =
         WakePlaylistEntry(
