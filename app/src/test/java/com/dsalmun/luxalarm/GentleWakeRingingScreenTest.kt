@@ -1,6 +1,7 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
- * for GentleWake in 2026 under GPLv3-or-later.
+ * Warmly is a 2026 modification of Lux Alarm, originally authored by Daniel Salmun.
+ * Additional Warmly code and modifications Copyright (C) 2026 김은준.
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.dsalmun.luxalarm
 

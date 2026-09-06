@@ -1,19 +1,7 @@
 /*
- * This file is part of Lux Alarm, authored by Daniel Salmun, and was modified
- * for GentleWake in 2026.
- *
- * Lux Alarm is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Lux Alarm is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Lux Alarm.  If not, see <https://www.gnu.org/licenses/>.
+ * Warmly is a 2026 modification of Lux Alarm, originally authored by Daniel Salmun.
+ * Additional Warmly code and modifications Copyright (C) 2026 김은준.
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.dsalmun.luxalarm
 
@@ -27,7 +15,11 @@ class WakeRampTest {
     fun matchesEveryCheckedInJsonVector() {
         val vectors = readVectors()
 
-        assertEquals(7, vectors.size, "The canonical vector set changed; update this parser if needed")
+        assertEquals(
+            7,
+            vectors.size,
+            "The canonical vector set changed; update this parser if needed",
+        )
         vectors.forEach { expected ->
             val actual = WakeRamp.frameAt(expected.progress)
             assertClose(expected.clampedProgress, actual.clampedProgress, "clamped progress")
@@ -78,11 +70,7 @@ class WakeRampTest {
     }
 
     private fun String.number(name: String): Float =
-        Regex("\"$name\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)")
-            .find(this)
-            ?.groupValues
-            ?.get(1)
-            ?.toFloat()
+        Regex("\"$name\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)").find(this)?.groupValues?.get(1)?.toFloat()
             ?: error("Missing $name in $this")
 
     private data class Vector(
