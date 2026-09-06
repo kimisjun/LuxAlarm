@@ -75,66 +75,93 @@ internal class WakePlaylistPlayback<Source>(
 
     private fun playFrom(
         startIndex: Int,
-        scanCount: Int = trackSources.size,
+        failedIndices: Set<Int> = emptySet(),
     ): WakePlaylistPlaybackState {
-        repeat(scanCount) { offset ->
+        var attemptedIndices = failedIndices
+        repeat(trackSources.size) { offset ->
             val index = (startIndex + offset) % trackSources.size
+            if (index in attemptedIndices) return@repeat
+            attemptedIndices = attemptedIndices + index
             val source = trackSources[index] ?: return@repeat
-            val token = Any()
-            val created =
-                runCatching {
-                        playerFactory.create(
-                            source = source,
-                            initialGain = gain,
-                            onCompletion = { advanceAfter(index, token, trackSources.size) },
-                            onError = {
-                                advanceAfter(
-                                    index,
-                                    token,
-                                    (trackSources.size - 1).coerceAtLeast(0),
-                                )
-                            },
-                        )
-                    }
-                    .getOrNull() ?: return@repeat
-            activeToken = token
-            player = created
-            return WakePlaylistPlaybackState.PlayingTrack(index)
+            val failureHistory = attemptedIndices
+            val activated =
+                activate(
+                    source = source,
+                    playingState = WakePlaylistPlaybackState.PlayingTrack(index),
+                    onCompletion = { playFrom(index + 1) },
+                    onError = { playFrom(index + 1, failureHistory) },
+                ) ?: return@repeat
+            return activated
         }
         return playFallback()
     }
 
     private fun playFallback(): WakePlaylistPlaybackState {
         val source = fallbackSource ?: return WakePlaylistPlaybackState.Failed
+        return activate(
+            source = source,
+            playingState = WakePlaylistPlaybackState.PlayingFallback,
+            onCompletion = null,
+            onError = { WakePlaylistPlaybackState.Failed },
+        ) ?: WakePlaylistPlaybackState.Failed
+    }
+
+    private fun activate(
+        source: Source,
+        playingState: WakePlaylistPlaybackState,
+        onCompletion: (() -> WakePlaylistPlaybackState)?,
+        onError: () -> WakePlaylistPlaybackState,
+    ): WakePlaylistPlaybackState? {
         val token = Any()
+        var committed = false
+        var consumed = false
+        var pendingEvent: PlayerEvent? = null
+
+        fun transition(event: PlayerEvent): WakePlaylistPlaybackState {
+            if (activeToken === token) {
+                player?.release()
+                player = null
+                activeToken = null
+            }
+            return when (event) {
+                PlayerEvent.COMPLETION -> checkNotNull(onCompletion).invoke()
+                PlayerEvent.ERROR -> onError()
+            }
+        }
+
+        fun signal(event: PlayerEvent) {
+            if (event == PlayerEvent.COMPLETION && onCompletion == null) return
+            if (consumed) return
+            if (!committed) {
+                if (pendingEvent == null) pendingEvent = event
+                return
+            }
+            if (activeToken !== token) return
+            consumed = true
+            state = transition(event)
+        }
+
         val created =
             runCatching {
                     playerFactory.create(
                         source = source,
                         initialGain = gain,
-                        onCompletion = {},
-                        onError = { failFallback(token) },
+                        onCompletion = { signal(PlayerEvent.COMPLETION) },
+                        onError = { signal(PlayerEvent.ERROR) },
                     )
                 }
-                .getOrNull() ?: return WakePlaylistPlaybackState.Failed
+                .getOrNull() ?: return null
         activeToken = token
         player = created
-        return WakePlaylistPlaybackState.PlayingFallback
+        committed = true
+
+        val deferredEvent = pendingEvent ?: return playingState
+        consumed = true
+        return transition(deferredEvent)
     }
 
-    private fun failFallback(token: Any) {
-        if (activeToken !== token) return
-        player?.release()
-        player = null
-        activeToken = null
-        state = WakePlaylistPlaybackState.Failed
-    }
-
-    private fun advanceAfter(index: Int, token: Any, scanCount: Int) {
-        if (activeToken !== token) return
-        player?.release()
-        player = null
-        activeToken = null
-        state = playFrom(index + 1, scanCount)
+    private enum class PlayerEvent {
+        COMPLETION,
+        ERROR,
     }
 }

@@ -26,20 +26,19 @@ import java.io.File
 internal interface GentleWakePreviewPlayer {
     fun setVolume(volume: Float)
 
-    fun setOnCompletionListener(listener: () -> Unit) = Unit
-
-    fun setOnErrorListener(listener: () -> Unit) = Unit
-
     fun stop()
 
     fun release()
 }
 
-internal fun interface GentleWakePreviewPlayerFactory {
-    fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer?
-
-    fun create(uri: Uri, initialVolume: Float, looping: Boolean): GentleWakePreviewPlayer? =
-        create(uri, initialVolume)
+internal interface GentleWakePreviewPlayerFactory {
+    fun create(
+        uri: Uri,
+        initialVolume: Float,
+        looping: Boolean = true,
+        onCompletion: () -> Unit = {},
+        onError: () -> Unit = {},
+    ): GentleWakePreviewPlayer?
 }
 
 internal sealed interface GentleWakePreviewPlaybackState {
@@ -94,13 +93,13 @@ internal class GentleWakePreviewPlaybackController(
                     ): WakePlaylistPlayer? =
                         playerFactory
                             .create(
-                                source,
-                                initialGain,
+                                uri = source,
+                                initialVolume = initialGain,
                                 looping = source == defaultAlarmUri,
+                                onCompletion = onCompletion,
+                                onError = onError,
                             )
                             ?.let { previewPlayer ->
-                                previewPlayer.setOnCompletionListener(onCompletion)
-                                previewPlayer.setOnErrorListener(onError)
                                 object : WakePlaylistPlayer {
                                     override fun setGain(gain: Float) =
                                         previewPlayer.setVolume(gain)
@@ -144,13 +143,12 @@ internal class AndroidGentleWakePreviewPlayerFactory(context: Context) :
     GentleWakePreviewPlayerFactory {
     private val appContext = context.applicationContext
 
-    override fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer? =
-        create(uri, initialVolume, looping = true)
-
     override fun create(
         uri: Uri,
         initialVolume: Float,
         looping: Boolean,
+        onCompletion: () -> Unit,
+        onError: () -> Unit,
     ): GentleWakePreviewPlayer? {
         var mediaPlayer: MediaPlayer? = null
         return try {
@@ -167,6 +165,11 @@ internal class AndroidGentleWakePreviewPlayerFactory(context: Context) :
                     prepare()
                     val volume = initialVolume.coerceIn(0f, 1f)
                     setVolume(volume, volume)
+                    setOnCompletionListener { onCompletion() }
+                    setOnErrorListener { _, _, _ ->
+                        onError()
+                        true
+                    }
                     start()
                 }
             AndroidGentleWakePreviewPlayer(mediaPlayer)
@@ -187,17 +190,6 @@ private class AndroidGentleWakePreviewPlayer(private val mediaPlayer: MediaPlaye
     override fun setVolume(volume: Float) {
         val gain = volume.coerceIn(0f, 1f)
         mediaPlayer.setVolume(gain, gain)
-    }
-
-    override fun setOnCompletionListener(listener: () -> Unit) {
-        mediaPlayer.setOnCompletionListener { listener() }
-    }
-
-    override fun setOnErrorListener(listener: () -> Unit) {
-        mediaPlayer.setOnErrorListener { _, _, _ ->
-            listener()
-            true
-        }
     }
 
     override fun stop() {

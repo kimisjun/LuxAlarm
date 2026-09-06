@@ -187,24 +187,31 @@ class GentleWakePreviewPlaybackControllerTest {
         val requestedUris = mutableListOf<Uri>()
         val players = mutableListOf<RecordingPlayer>()
 
-        override fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer? {
+        override fun create(
+            uri: Uri,
+            initialVolume: Float,
+            looping: Boolean,
+            onCompletion: () -> Unit,
+            onError: () -> Unit,
+        ): GentleWakePreviewPlayer? {
             requestedUris += uri
             if (uri in failingUris) return null
-            return RecordingPlayer(initialVolume).also(players::add)
+            return RecordingPlayer(initialVolume, onCompletion, onError).also(players::add)
         }
     }
 
-    private class RecordingPlayer(val initialVolume: Float) : GentleWakePreviewPlayer {
+    private class RecordingPlayer(
+        val initialVolume: Float,
+        private val onCompletion: () -> Unit,
+        private val onError: () -> Unit,
+    ) : GentleWakePreviewPlayer {
         val volumeUpdates = mutableListOf<Float>()
         var stopCount = 0
         var releaseCount = 0
-        private var completionListener: () -> Unit = {}
 
-        fun complete() = completionListener()
+        fun complete() = onCompletion()
 
-        override fun setOnCompletionListener(listener: () -> Unit) {
-            completionListener = listener
-        }
+        fun fail() = onError()
 
         override fun setVolume(volume: Float) {
             volumeUpdates += volume
@@ -231,6 +238,41 @@ class GentleWakePreviewPlaybackControllerTest {
     @After
     fun tearDownAndroidFactory() {
         ShadowMediaPlayer.setCreateListener(null)
+    }
+
+    @Test
+    fun androidFactoryInstallsCallbacksOnTheStartedPlayer() {
+        val importedFile =
+            File(context.filesDir, "gentle-wake-audio/callback-track").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3, 4))
+            }
+        val fileUri = Uri.fromFile(importedFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, fileUri),
+            ShadowMediaPlayer.MediaInfo(5_000, 0),
+        )
+        var completionCount = 0
+        var errorCount = 0
+
+        val previewPlayer =
+            AndroidGentleWakePreviewPlayerFactory(context)
+                .create(
+                    uri = fileUri,
+                    initialVolume = 0.2f,
+                    looping = false,
+                    onCompletion = { completionCount++ },
+                    onError = { errorCount++ },
+                )
+
+        assertNotNull(previewPlayer)
+        val shadowPlayer = shadowOf(createdPlayers.single())
+        assertNotNull(shadowPlayer.onCompletionListener)
+        shadowPlayer.invokeCompletionListener()
+        shadowPlayer.invokeErrorListener(1, 1)
+        assertEquals(1, completionCount)
+        assertEquals(1, errorCount)
+        previewPlayer.release()
     }
 
     @Test

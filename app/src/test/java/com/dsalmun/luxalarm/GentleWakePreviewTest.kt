@@ -205,7 +205,13 @@ class GentleWakePreviewTest {
         val requestedUris = mutableListOf<Uri>()
         val player = PreviewRecordingPlayer()
 
-        override fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer? {
+        override fun create(
+            uri: Uri,
+            initialVolume: Float,
+            looping: Boolean,
+            onCompletion: () -> Unit,
+            onError: () -> Unit,
+        ): GentleWakePreviewPlayer? {
             requestedUris += uri
             if (failAll || uri == failingUri) return null
             player.initialVolume = initialVolume
