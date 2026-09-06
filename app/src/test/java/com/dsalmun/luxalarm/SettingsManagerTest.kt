@@ -114,16 +114,46 @@ class SettingsManagerTest {
     }
 
     @Test
-    fun failedImportedPathCommitPreservesCurrentProfile() {
+    fun failedImportedPathCommitRestoresSharedPreferencesMemoryAndPreservesStateFlow() {
         SettingsManager(context).updateWakeProfile(WakeProfile(dismissal = WakeDismissal.LUX))
-        val manager = SettingsManager(context, commitEditor = { false })
+        val manager =
+            SettingsManager(
+                context,
+                commitEditor = { editor ->
+                    editor.commit()
+                    false
+                },
+            )
 
         assertFalse(manager.commitImportedAudioPath("/owned/audio"))
 
         assertEquals(WakeDismissal.LUX, manager.wakeProfile.value.dismissal)
         assertEquals(null, manager.wakeProfile.value.importedAudioPath)
-        assertEquals(WakeDismissal.LUX, SettingsManager(context).getWakeProfile().dismissal)
-        assertEquals(null, SettingsManager(context).getWakeProfile().importedAudioPath)
+        assertEquals(WakeDismissal.LUX, manager.getWakeProfile().dismissal)
+        assertEquals(null, manager.getWakeProfile().importedAudioPath)
+    }
+
+    @Test
+    fun exceptionalCommitRestoresSharedPreferencesMemoryBeforeRethrowing() {
+        val original = WakeProfile(dismissal = WakeDismissal.LUX)
+        SettingsManager(context).updateWakeProfile(original)
+        val manager =
+            SettingsManager(
+                context,
+                commitEditor = { editor ->
+                    editor.commit()
+                    error("commit result lost")
+                },
+            )
+
+        val failure =
+            kotlin.test.assertFailsWith<IllegalStateException> {
+                manager.commitImportedAudioPath("/owned/audio")
+            }
+
+        assertEquals("commit result lost", failure.message)
+        assertEquals(original, manager.getWakeProfile())
+        assertEquals(original, manager.wakeProfile.value)
     }
 
     @Test

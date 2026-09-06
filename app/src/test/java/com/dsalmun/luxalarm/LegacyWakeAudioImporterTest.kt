@@ -61,6 +61,27 @@ class LegacyWakeAudioImporterTest {
     }
 
     @Test
+    fun failedCommitUsesKnownPriorReferenceInsteadOfMutatedPreferencesCache() = runTest {
+        val prefs = context.getSharedPreferences("lux_alarm_settings", Context.MODE_PRIVATE)
+        val settings = SettingsManager(context)
+        val importer =
+            LegacyWakeAudioImporter(
+                WakeAudioStore(root) { ByteArrayInputStream("new audio".encodeToByteArray()) },
+                settings,
+                commitImportedAudioPath = { path ->
+                    prefs.edit().putString("wake_imported_audio_path", path).commit()
+                    false
+                },
+            )
+
+        assertFailsWith<IllegalStateException> {
+            importer.importDocument("content://new")
+        }
+
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+    }
+
+    @Test
     fun failedDurableSettingsCommitPreservesPreexistingDuplicateBytes() = runTest {
         val bytes = "shared audio".encodeToByteArray()
         val store = WakeAudioStore(root) { ByteArrayInputStream(bytes) }
@@ -77,7 +98,7 @@ class LegacyWakeAudioImporterTest {
     }
 
     @Test
-    fun settingsCommitResponseLossPreservesDurablyReferencedFinal() = runTest {
+    fun settingsCommitResponseLossRestoresMemoryAndRetainsPendingEvidence() = runTest {
         val settings =
             SettingsManager(
                 context,
@@ -96,9 +117,15 @@ class LegacyWakeAudioImporterTest {
             importer.importDocument("content://audio")
         }
 
-        val durablePath = SettingsManager(context).getWakeProfile().importedAudioPath
-        assertTrue(durablePath != null && File(durablePath).isFile)
-        assertFalse(File(root, "tracks/.import.pending").exists())
+        assertEquals(null, settings.getWakeProfile().importedAudioPath)
+        assertEquals(null, settings.wakeProfile.value.importedAudioPath)
+        assertEquals(
+            1,
+            File(root, "tracks").listFiles().orEmpty().count {
+                it.name.matches(Regex("[0-9a-f]{64}"))
+            },
+        )
+        assertTrue(File(root, "tracks/.import.pending").isFile)
     }
 
     @Test
@@ -181,7 +208,7 @@ class LegacyWakeAudioImporterTest {
     }
 
     @Test
-    fun cancellationDuringSettingsCommitIsRethrownAfterRollingBackPublishedBytes() = runTest {
+    fun cancellationDuringSettingsCommitIsRethrownWithPendingEvidencePreserved() = runTest {
         val settings = SettingsManager(context)
         val importer =
             LegacyWakeAudioImporter(
@@ -196,7 +223,13 @@ class LegacyWakeAudioImporterTest {
             }
 
         assertEquals("cancel import", cancellation.message)
-        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+        assertTrue(File(root, "tracks/.import.pending").isFile)
+        assertEquals(
+            1,
+            File(root, "tracks").listFiles().orEmpty().count {
+                it.name.matches(Regex("[0-9a-f]{64}"))
+            },
+        )
         assertEquals(null, settings.getWakeProfile().importedAudioPath)
     }
 }

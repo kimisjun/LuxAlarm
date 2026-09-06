@@ -20,12 +20,38 @@ data class WakeProfile(
     val importedAudioPath: String? = null,
 )
 
+internal fun interface SharedPreferencesWritePort {
+    fun commitOrRestore(
+        attempted: SharedPreferences.Editor,
+        restore: SharedPreferences.Editor,
+    ): Boolean
+}
+
+internal class CommitRestoringSharedPreferencesWritePort(
+    private val commitEditor: (SharedPreferences.Editor) -> Boolean
+) : SharedPreferencesWritePort {
+    override fun commitOrRestore(
+        attempted: SharedPreferences.Editor,
+        restore: SharedPreferences.Editor,
+    ): Boolean =
+        try {
+            val committed = commitEditor(attempted)
+            if (!committed) restore.apply()
+            committed
+        } catch (cause: Exception) {
+            runCatching(restore::apply).onFailure(cause::addSuppressed)
+            throw cause
+        }
+}
+
 class SettingsManager(
     context: Context,
-    private val commitEditor: (SharedPreferences.Editor) -> Boolean = { it.commit() },
+    commitEditor: (SharedPreferences.Editor) -> Boolean = { it.commit() },
 ) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val writePort: SharedPreferencesWritePort =
+        CommitRestoringSharedPreferencesWritePort(commitEditor)
 
     private val _requiredLuxLevel = MutableStateFlow(getRequiredLuxLevel())
     val requiredLuxLevel: StateFlow<Float> = _requiredLuxLevel.asStateFlow()
@@ -85,7 +111,11 @@ class SettingsManager(
                 _wakeProfile.value = profile
                 return@synchronized true
             }
-            val committed = commitEditor(profileEditor(profile))
+            val committed =
+                writePort.commitOrRestore(
+                    attempted = profileEditor(profile),
+                    restore = profileEditor(current),
+                )
             if (committed) _wakeProfile.value = profile
             committed
         }
