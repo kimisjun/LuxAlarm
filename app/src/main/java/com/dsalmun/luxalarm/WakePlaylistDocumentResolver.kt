@@ -30,6 +30,10 @@ class WakePlaylistDocumentResolver(
         { operation ->
             operation()
         },
+    findTransaction: suspend (suspend () -> WakePlaylistFindResult) -> WakePlaylistFindResult =
+        { operation ->
+            operation()
+        },
     fallbackTitle: String = "Imported audio",
 ) {
     private val audioStore =
@@ -41,6 +45,7 @@ class WakePlaylistDocumentResolver(
             playlistStore = playlistStore,
             beforeImport = beforeImport,
             transaction = transaction,
+            findTransaction = findTransaction,
             fallbackTitle = fallbackTitle,
             titleFor = titleFor,
         )
@@ -51,6 +56,15 @@ class WakePlaylistDocumentResolver(
     ): List<WakePlaylistImportResult> =
         withContext(ioDispatcher) {
             importer.importIntoPlaylist(playlistId, documentUris).toList()
+        }
+
+    suspend fun findMissingTrack(
+        playlistId: String,
+        expectedTrackId: String,
+        documentUri: String,
+    ): WakePlaylistFindResult =
+        withContext(ioDispatcher) {
+            importer.findMissingTrack(playlistId, expectedTrackId, documentUri)
         }
 
     suspend fun ownedFileExists(path: String): Boolean =
@@ -83,6 +97,9 @@ class WakePlaylistDocumentResolver(
                 titleFor = { documentUri -> displayNameFor(context, documentUri) },
                 providedAudioStore = AppContainer.wakeAudioStore,
                 transaction = { operation ->
+                    AppContainer.withWakeAudioImportTransaction(operation)
+                },
+                findTransaction = { operation ->
                     AppContainer.withWakeAudioImportTransaction(operation)
                 },
                 fallbackTitle = fallbackTitle,

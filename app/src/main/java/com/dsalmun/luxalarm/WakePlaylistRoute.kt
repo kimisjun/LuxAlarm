@@ -50,6 +50,7 @@ fun WakePlaylistRoute(
     onBack: () -> Unit = {},
     onSelectionChanged: (WakePlaylist?) -> Unit = {},
     importDocuments: (suspend (String, List<String>) -> List<WakePlaylistImportResult>)? = null,
+    findDocument: (suspend (String, String, String) -> WakePlaylistFindResult)? = null,
     ownedFileExists: ((String) -> Boolean)? = null,
     deleteOwnedBytes: ((WakeTrack) -> Boolean)? = null,
     usePlatformNameDialog: Boolean = true,
@@ -65,10 +66,18 @@ fun WakePlaylistRoute(
             )
         }
     val factory =
-        remember(playlistStore, resolver, importDocuments, ownedFileExists, deleteOwnedBytes) {
+        remember(
+            playlistStore,
+            resolver,
+            importDocuments,
+            findDocument,
+            ownedFileExists,
+            deleteOwnedBytes,
+        ) {
             WakePlaylistViewModelFactory(
                 playlistStore = playlistStore,
                 importDocuments = importDocuments ?: resolver::importIntoPlaylist,
+                findDocument = findDocument ?: resolver::findMissingTrack,
                 ownedFileExists =
                     ownedFileExists?.let { exists -> { path: String -> exists(path) } }
                         ?: resolver::ownedFileExists,
@@ -220,6 +229,7 @@ fun WakePlaylistRoute(
 private class WakePlaylistViewModelFactory(
     private val playlistStore: WakePlaylistStore,
     private val importDocuments: suspend (String, List<String>) -> List<WakePlaylistImportResult>,
+    private val findDocument: suspend (String, String, String) -> WakePlaylistFindResult,
     private val ownedFileExists: suspend (String) -> Boolean,
     private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
 ) : ViewModelProvider.Factory {
@@ -230,6 +240,7 @@ private class WakePlaylistViewModelFactory(
             savedStateHandle = extras.createSavedStateHandle(),
             playlistStore = playlistStore,
             importDocuments = importDocuments,
+            findDocument = findDocument,
             ownedFileExists = ownedFileExists,
             deleteOwnedBytes = deleteOwnedBytes,
         )
@@ -324,6 +335,22 @@ internal fun List<WakePlaylistImportResult>.toImportSummary() =
         duplicates = count { it is WakePlaylistImportResult.AlreadyInPlaylist },
         unsupported = count { it is WakePlaylistImportResult.Unsupported },
         failed = count { it is WakePlaylistImportResult.Failed },
+    )
+
+internal fun WakePlaylistFindResult.toImportSummary() =
+    WakePlaylistImportSummaryUi(
+        added = if (this is WakePlaylistFindResult.Restored) 1 else 0,
+        duplicates = 0,
+        unsupported = if (this is WakePlaylistFindResult.Unsupported) 1 else 0,
+        failed =
+            if (
+                this is WakePlaylistFindResult.Failed ||
+                    this is WakePlaylistFindResult.ContentMismatch
+            ) {
+                1
+            } else {
+                0
+            },
     )
 
 private fun PlaylistMutationError.messageResource(): Int =

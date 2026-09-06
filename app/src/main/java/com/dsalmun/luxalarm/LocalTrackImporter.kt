@@ -5,6 +5,8 @@
  */
 package com.dsalmun.luxalarm
 
+import kotlinx.coroutines.CancellationException
+
 sealed interface LocalTrackImportResult {
     val documentUri: String
 
@@ -80,6 +82,8 @@ class LocalTrackImporter(
             } else {
                 LocalTrackPreparation.Ready(documentUri, store.prepareDocument(documentUri))
             }
+        } catch (cause: CancellationException) {
+            throw cause
         } catch (cause: Exception) {
             LocalTrackPreparation.Failed(documentUri, cause)
         }

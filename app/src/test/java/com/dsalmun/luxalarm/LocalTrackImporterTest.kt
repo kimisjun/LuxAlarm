@@ -9,10 +9,26 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
+import kotlinx.coroutines.CancellationException
 import org.junit.Test
 
 class LocalTrackImporterTest {
+    @Test
+    fun cancellationWhilePreparingIsNotConvertedToAResult() {
+        val root = File("build/test-audio/${UUID.randomUUID()}")
+        val importer =
+            LocalTrackImporter(WakeAudioStore(root) { throw CancellationException("cancel") }) {
+                "audio/mpeg"
+            }
+
+        assertFailsWith<CancellationException> {
+            importer.prepareDocument("content://song")
+        }
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+    }
+
     @Test
     fun unsupportedDocumentDoesNotCreateOwnedBytes() {
         val root = File("build/test-audio/${UUID.randomUUID()}")

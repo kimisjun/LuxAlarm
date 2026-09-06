@@ -67,6 +67,76 @@ class WakePlaylistViewModelTest {
         }
 
     @Test
+    fun findUsesDistinctCallbackAndKeepsPendingUntilTypedCompletion() =
+        runTest(dispatcher) {
+            val handle = SavedStateHandle()
+            val store = RecordingPlaylistStore()
+            val started = CompletableDeferred<Unit>()
+            val finish = CompletableDeferred<WakePlaylistFindResult>()
+            var ordinaryImports = 0
+            val model =
+                WakePlaylistViewModel(
+                    savedStateHandle = handle,
+                    playlistStore = store,
+                    importDocuments = { _, _ ->
+                        ordinaryImports++
+                        emptyList()
+                    },
+                    findDocument = { playlistId, oldTrackId, uri ->
+                        assertEquals("playlist-a", playlistId)
+                        assertEquals("missing", oldTrackId)
+                        assertEquals("content://same", uri)
+                        started.complete(Unit)
+                        finish.await()
+                    },
+                    ownedFileExists = { true },
+                    deleteOwnedBytes = { true },
+                )
+            model.openEditor("playlist-a")
+            model.requestFind("missing")
+            model.completePicker(listOf("content://same"))
+            runCurrent()
+            started.await()
+
+            assertIs<PendingPickerOperation.Find>(model.pendingPickerOperation)
+            finish.complete(
+                WakePlaylistFindResult.ContentMismatch("content://same", "missing", "different")
+            )
+            advanceUntilIdle()
+
+            assertEquals(0, ordinaryImports)
+            assertNull(model.pendingPickerOperation)
+        }
+
+    @Test
+    fun interruptedFindKeepsSavedPendingOperationForRecreation() =
+        runTest(dispatcher) {
+            val handle = SavedStateHandle()
+            val store = RecordingPlaylistStore()
+            val model =
+                WakePlaylistViewModel(
+                    savedStateHandle = handle,
+                    playlistStore = store,
+                    importDocuments = { _, _ -> emptyList() },
+                    findDocument = { _, _, _ ->
+                        throw kotlinx.coroutines.CancellationException("stop")
+                    },
+                    ownedFileExists = { true },
+                    deleteOwnedBytes = { true },
+                )
+            model.openEditor("playlist-a")
+            model.requestFind("missing")
+            model.completePicker(listOf("content://same"))
+            advanceUntilIdle()
+
+            val recreated = viewModel(handle, store) { _, _ -> emptyList() }
+            assertEquals(
+                PendingPickerOperation.Find("playlist-a", "missing"),
+                recreated.pendingPickerOperation,
+            )
+        }
+
+    @Test
     fun cancellationClearsFindBeforeNextOrdinaryImport() =
         runTest(dispatcher) {
             val store = RecordingPlaylistStore()
@@ -88,25 +158,6 @@ class WakePlaylistViewModelTest {
 
             assertEquals(listOf("playlist-a"), imports)
             assertFalse(store.removeCalls.any { it.second == "missing" })
-        }
-
-    @Test
-    fun findSameFilePreservesMembershipWhileDistinctFindRollsBackNewMembership() =
-        runTest(dispatcher) {
-            val store = RecordingPlaylistStore()
-            var result: WakePlaylistImportResult = imported("missing", added = false)
-            val model = viewModel(SavedStateHandle(), store) { _, _ -> listOf(result) }
-            model.openEditor("playlist-a")
-            model.requestFind("missing")
-            model.completePicker(listOf("content://same"))
-            advanceUntilIdle()
-            assertEquals(emptyList(), store.removeCalls)
-
-            result = imported("different", added = true)
-            model.requestFind("missing")
-            model.completePicker(listOf("content://different"))
-            advanceUntilIdle()
-            assertEquals(listOf("playlist-a" to "different"), store.removeCalls)
         }
 
     @Test
@@ -345,6 +396,9 @@ class WakePlaylistViewModelTest {
                     savedStateHandle = SavedStateHandle(mapOf("playlist.editorId" to "playlist-a")),
                     playlistStore = store,
                     importDocuments = { _, _ -> emptyList() },
+                    findDocument = { _, _, uri ->
+                        WakePlaylistFindResult.Failed(uri, IllegalStateException("unused"))
+                    },
                     ownedFileExists = { true },
                     deleteOwnedBytes = {
                         deleteCalls++
@@ -377,6 +431,9 @@ class WakePlaylistViewModelTest {
                     savedStateHandle = SavedStateHandle(mapOf("playlist.editorId" to "playlist-a")),
                     playlistStore = store,
                     importDocuments = { _, _ -> emptyList() },
+                    findDocument = { _, _, uri ->
+                        WakePlaylistFindResult.Failed(uri, IllegalStateException("unused"))
+                    },
                     ownedFileExists = { true },
                     deleteOwnedBytes = { false },
                 )
@@ -416,6 +473,9 @@ class WakePlaylistViewModelTest {
             savedStateHandle = handle,
             playlistStore = store,
             importDocuments = importer,
+            findDocument = { _, _, uri ->
+                WakePlaylistFindResult.Failed(uri, IllegalStateException("unused"))
+            },
             ownedFileExists = { true },
             deleteOwnedBytes = { true },
         )

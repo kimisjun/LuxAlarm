@@ -16,6 +16,32 @@ import org.junit.Test
 
 class WakePlaylistDocumentResolverTest {
     @Test
+    fun findUsesDedicatedAtomicResolverPath() {
+        val bytes = "missing audio".encodeToByteArray()
+        val expectedId =
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+                "%02x".format(it)
+            }
+        val store = ResolverPlaylistStore()
+        val root = File("build/test-resolver/${UUID.randomUUID()}")
+        val resolver =
+            WakePlaylistDocumentResolver(
+                storageDirectory = root,
+                playlistStore = store,
+                openDocument = { ByteArrayInputStream(bytes) },
+                mimeTypeFor = { "audio/mpeg" },
+                titleFor = { "Recovered" },
+            )
+
+        val result = runBlocking {
+            resolver.findMissingTrack("playlist", expectedId, "content://song")
+        }
+
+        assertTrue(result is WakePlaylistFindResult.Restored)
+        root.deleteRecursively()
+    }
+
+    @Test
     fun allDocumentAndOwnedFileOperationsUseInjectedIoDispatcher() {
         val executor = Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "resolver-io")

@@ -14,9 +14,11 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -163,6 +165,162 @@ class WakePlaylistImporterTest {
             listOf("open:first", "register:first", "open:second", "register:second"),
             events,
         )
+        database.close()
+    }
+
+    @Test
+    fun findRejectsWrongFileBeforeRegistrationAndRemovesNewBytes() = runTest {
+        val database = open()
+        val playlistStore = RoomWakePlaylistStore(database)
+        val playlist = playlistStore.createPlaylist("Morning")
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) { ByteArrayInputStream("wrong audio".encodeToByteArray()) }
+                ) {
+                    "audio/mpeg"
+                },
+                playlistStore,
+            ) {
+                "Wrong.mp3"
+            }
+
+        val result =
+            importer.findMissingTrack(
+                playlist.id,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content://wrong",
+            )
+
+        assertIs<WakePlaylistFindResult.ContentMismatch>(result)
+        assertEquals(emptyList(), playlistStore.listLibraryTracks())
+        assertEquals(emptyList(), playlistStore.listEntries(playlist.id))
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+        database.close()
+    }
+
+    @Test
+    fun findMismatchNeverDeletesPreexistingDuplicateBytes() = runTest {
+        val database = open()
+        val playlistStore = RoomWakePlaylistStore(database)
+        val playlist = playlistStore.createPlaylist("Morning")
+        val bytes = "shared wrong audio".encodeToByteArray()
+        val audioStore = WakeAudioStore(root) { ByteArrayInputStream(bytes) }
+        val shared = audioStore.storeDocument("content://existing").track
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(audioStore) { "audio/mpeg" },
+                playlistStore,
+            ) {
+                "Wrong.mp3"
+            }
+
+        val result =
+            importer.findMissingTrack(
+                playlist.id,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content://duplicate",
+            )
+
+        assertIs<WakePlaylistFindResult.ContentMismatch>(result)
+        assertEquals(bytes.toList(), File(shared.path).readBytes().toList())
+        assertEquals(emptyList(), playlistStore.listLibraryTracks())
+        assertEquals(emptyList(), playlistStore.listEntries(playlist.id))
+        database.close()
+    }
+
+    @Test
+    fun findExactFileRestoresExpectedMembership() = runTest {
+        val database = open()
+        val playlistStore = RoomWakePlaylistStore(database)
+        val playlist = playlistStore.createPlaylist("Morning")
+        val bytes = "exact missing audio".encodeToByteArray()
+        val expectedId =
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+                "%02x".format(it)
+            }
+        val expectedPath = File(root, "tracks/$expectedId").absoluteFile.normalize().path
+        playlistStore.registerTrackInPlaylist(
+            playlist.id,
+            WakeTrack(expectedId, "Original.mp3", expectedPath),
+        )
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(WakeAudioStore(root) { ByteArrayInputStream(bytes) }) {
+                    "audio/mpeg"
+                },
+                playlistStore,
+            ) {
+                "Recovered.mp3"
+            }
+
+        val result = importer.findMissingTrack(playlist.id, expectedId, "content://exact")
+
+        val restored = assertIs<WakePlaylistFindResult.Restored>(result)
+        assertEquals(expectedId, restored.entry.track.id)
+        assertEquals(listOf(expectedId), playlistStore.listLibraryTracks().map { it.id })
+        assertEquals(listOf(expectedId), playlistStore.listEntries(playlist.id).map { it.track.id })
+        assertTrue(File(restored.ownedTrack.path).isFile)
+        database.close()
+    }
+
+    @Test
+    fun findStalePlaylistDoesNotOpenOrPublishDocument() = runTest {
+        var opened = false
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) {
+                        opened = true
+                        ByteArrayInputStream("audio".encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                MutablePlaylistStore().apply { exists = false },
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.findMissingTrack("deleted", "expected", "content://track")
+
+        assertIs<WakePlaylistFindResult.Failed>(result)
+        assertFalse(opened)
+        assertFalse(File(root, "tracks").exists())
+    }
+
+    @Test
+    fun findCancellationAfterPreparationCleansUnregisteredBytesAndRethrows() = runTest {
+        val database = open()
+        val roomStore = RoomWakePlaylistStore(database)
+        val playlist = roomStore.createPlaylist("Morning")
+        val bytes = "cancelled audio".encodeToByteArray()
+        val expectedId =
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") {
+                "%02x".format(it)
+            }
+        val cancellingStore =
+            object : WakePlaylistStore by roomStore {
+                override suspend fun registerTrackInPlaylist(
+                    playlistId: String,
+                    track: WakeTrack,
+                ): WakePlaylistRegistration = throw CancellationException("cancel")
+            }
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(WakeAudioStore(root) { ByteArrayInputStream(bytes) }) {
+                    "audio/mpeg"
+                },
+                cancellingStore,
+            ) {
+                "Track.mp3"
+            }
+
+        assertFailsWith<CancellationException> {
+            importer.findMissingTrack(playlist.id, expectedId, "content://track")
+        }
+        assertEquals(emptyList(), roomStore.listLibraryTracks())
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
         database.close()
     }
 

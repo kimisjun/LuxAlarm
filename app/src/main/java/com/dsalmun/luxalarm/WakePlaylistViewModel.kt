@@ -60,6 +60,7 @@ class WakePlaylistViewModel(
     private val savedStateHandle: SavedStateHandle,
     private val playlistStore: WakePlaylistStore,
     private val importDocuments: suspend (String, List<String>) -> List<WakePlaylistImportResult>,
+    private val findDocument: suspend (String, String, String) -> WakePlaylistFindResult,
     private val ownedFileExists: suspend (String) -> Boolean,
     private val deleteOwnedBytes: suspend (WakeTrack) -> Boolean,
 ) : ViewModel() {
@@ -275,31 +276,31 @@ class WakePlaylistViewModel(
 
     fun completePicker(documentUris: List<String>) {
         val operation = pendingPickerOperation ?: return
-        clearPending()
-        if (documentUris.isEmpty()) return
-        durable(PlaylistMutationError.IMPORT) {
-            val results = importDocuments(operation.playlistId, documentUris)
-            when (operation) {
-                is PendingPickerOperation.Import -> Unit
-                is PendingPickerOperation.Find -> preserveFindMembership(operation, results)
-                is PendingPickerOperation.Replace -> replaceAfterDistinctAdd(operation, results)
-            }
-            _state.value =
-                _state.value.copy(
-                    screen = _state.value.screen.copy(importSummary = results.toImportSummary())
-                )
-            refreshAfterCommit()
+        if (documentUris.isEmpty()) {
+            clearPending()
+            return
         }
-    }
-
-    private suspend fun preserveFindMembership(
-        operation: PendingPickerOperation.Find,
-        results: List<WakePlaylistImportResult>,
-    ) {
-        results.filterIsInstance<WakePlaylistImportResult.Added>().forEach { result ->
-            if (result.ownedTrack.id != operation.oldTrackId) {
-                playlistStore.removeTrack(operation.playlistId, result.ownedTrack.id)
+        if (operation !is PendingPickerOperation.Find) clearPending()
+        durable(PlaylistMutationError.IMPORT) {
+            if (operation is PendingPickerOperation.Find) {
+                val result =
+                    findDocument(operation.playlistId, operation.oldTrackId, documentUris.single())
+                _state.value =
+                    _state.value.copy(
+                        screen = _state.value.screen.copy(importSummary = result.toImportSummary())
+                    )
+                clearPending()
+            } else {
+                val results = importDocuments(operation.playlistId, documentUris)
+                if (operation is PendingPickerOperation.Replace) {
+                    replaceAfterDistinctAdd(operation, results)
+                }
+                _state.value =
+                    _state.value.copy(
+                        screen = _state.value.screen.copy(importSummary = results.toImportSummary())
+                    )
             }
+            refreshAfterCommit()
         }
     }
 
