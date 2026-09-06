@@ -5,8 +5,11 @@
  */
 package com.dsalmun.luxalarm.testing
 
+import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import androidx.test.core.app.ApplicationProvider
+import com.dsalmun.luxalarm.AlarmActivity
 import com.dsalmun.luxalarm.AppContainer
 import com.dsalmun.luxalarm.SettingsManager
 import kotlinx.coroutines.Dispatchers
@@ -28,8 +31,16 @@ class AppContainerTestRule(val repository: FakeAlarmRepository = FakeAlarmReposi
     lateinit var settingsManager: SettingsManager
         private set
 
+    private lateinit var alarmActivityComponent: ComponentName
+
     override fun starting(description: Description) {
         val context = ApplicationProvider.getApplicationContext<Context>()
+        alarmActivityComponent = ComponentName(context, AlarmActivity::class.java)
+        context.packageManager.setComponentEnabledSetting(
+            alarmActivityComponent,
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            PackageManager.DONT_KILL_APP,
+        )
         AppContainer.repository = repository
         settingsManager = SettingsManager(context)
         AppContainer.settingsManager = settingsManager
@@ -37,6 +48,12 @@ class AppContainerTestRule(val repository: FakeAlarmRepository = FakeAlarmReposi
     }
 
     override fun finished(description: Description) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        context.packageManager.setComponentEnabledSetting(
+            alarmActivityComponent,
+            PackageManager.COMPONENT_ENABLED_STATE_DEFAULT,
+            PackageManager.DONT_KILL_APP,
+        )
         AppContainer.ioDispatcher = Dispatchers.IO
     }
 }
