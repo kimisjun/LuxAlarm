@@ -66,7 +66,8 @@ private class ResolverPlaylistStore : WakePlaylistStore {
 
     override suspend fun createPlaylist(name: String) = error("unused")
 
-    override suspend fun listPlaylists(): List<WakePlaylist> = emptyList()
+    override suspend fun listPlaylists(): List<WakePlaylist> =
+        listOf(WakePlaylist("playlist", "Morning"))
 
     override suspend fun renamePlaylist(playlistId: String, name: String) = Unit
 
