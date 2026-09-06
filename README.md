@@ -14,7 +14,7 @@ Warmly는 Lux Alarm 2.4.1 by Daniel Salmun을 기반으로 2026년에 수정한 
 - 누락 트랙 `Find`, 안전한 `Replace`, ViewModel `SavedStateHandle` 복원
 - 순차 미리듣기와 기본 알람음 fallback
 
-감사 기준 `4c23b86`에서 자동화 테스트 491개, lint, Kotlin compile, APKs가 통과했고 Phase C P0/P1은 0개였다. 물리 기기 검증과 signed release는 아직 수행하지 않았다.
+P0/P1 감사 기준 `4c23b86`에서 자동화 테스트 491개, lint, Kotlin compile, APKs가 통과했고 Phase C P0/P1은 0개였다. 이후 미리듣기 파일 확인을 I/O dispatcher로 옮긴 최종 통합본은 자동화 테스트 492개를 통과했다. 물리 기기 검증과 signed release는 아직 수행하지 않았다.
 
 ## 아직 구현되지 않은 기능
 

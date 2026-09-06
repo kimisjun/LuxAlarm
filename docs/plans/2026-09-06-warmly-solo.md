@@ -29,7 +29,7 @@
 5. ViewModel `SavedStateHandle`로 편집·picker 상태를 복원한다.
 6. 순차 미리듣기, 누락·오류 건너뛰기, 기본 알람음 fallback을 구현한다.
 
-감사 기준 `4c23b86`: 자동화 테스트 491개, lint, Kotlin compile, APKs 통과. Phase C P0/P1 0개. 물리 기기 검증과 signed release는 포함하지 않는다.
+P0/P1 감사 기준 `4c23b86`: 자동화 테스트 491개, lint, Kotlin compile, APKs 통과 및 Phase C P0/P1 0개. 이후 미리듣기 I/O 보정 최종 통합본은 자동화 테스트 492개를 통과했다. 물리 기기 검증과 signed release는 포함하지 않는다.
 
 ## Phase D — 실제 기상 실행 (미구현)
 

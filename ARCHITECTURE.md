@@ -56,7 +56,8 @@ WarmlyOnboardingScreen
 
 감사 기준 commit: `4c23b86`
 
-- 자동화 테스트 491개 통과
+- P0/P1 독립 감사 기준 `4c23b86`: 자동화 테스트 491개 통과
+- 최종 미리듣기 I/O 보정 통합본: 자동화 테스트 492개 통과
 - lint, Kotlin compile, APKs 통과
 - 최종 Phase C 감사: P0 0개, P1 0개
 - 물리 Galaxy canary와 signed release는 수행하지 않음
