@@ -237,10 +237,9 @@ class GentleWakePreviewTest {
         val factory = PreviewRecordingFactory()
         val probeThreads = ConcurrentLinkedQueue<String>()
         val visible = mutableStateOf(true)
-        val resolutionExecutor =
-            Executors.newSingleThreadExecutor { runnable ->
-                Thread(runnable, "preview-resolution-io")
-            }
+        val resolutionExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "preview-resolution-io")
+        }
         val resolutionDispatcher = resolutionExecutor.asCoroutineDispatcher()
 
         try {
@@ -257,8 +256,7 @@ class GentleWakePreviewTest {
                                 path == selectedUri.path
                             },
                             resolutionDispatcher = resolutionDispatcher,
-                            defaultAlarmUri =
-                                Uri.parse("content://settings/system/alarm_alert"),
+                            defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
                             playerFactory = factory,
                         )
                     }
@@ -379,10 +377,9 @@ class GentleWakePreviewTest {
             )
         val factory = PreviewRecordingFactory()
         val visible = mutableStateOf(true)
-        val resolutionExecutor =
-            Executors.newSingleThreadExecutor { runnable ->
-                Thread(runnable, "cancelled-preview-resolution-io")
-            }
+        val resolutionExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "cancelled-preview-resolution-io")
+        }
         val resolutionDispatcher = resolutionExecutor.asCoroutineDispatcher()
 
         try {
@@ -396,8 +393,7 @@ class GentleWakePreviewTest {
                             legacyImportedPath = "/private/legacy",
                             isLocalFile = { true },
                             resolutionDispatcher = resolutionDispatcher,
-                            defaultAlarmUri =
-                                Uri.parse("content://settings/system/alarm_alert"),
+                            defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
                             playerFactory = factory,
                         )
                     }

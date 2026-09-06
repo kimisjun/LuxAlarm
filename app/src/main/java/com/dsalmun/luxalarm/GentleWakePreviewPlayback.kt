@@ -274,7 +274,8 @@ internal fun GentleWakePreviewRoute(
                         playlistId?.let { WakePlaylist(it, "") }
                             ?: playlistStore.selectedPlaylistForWake()
                     val entries = selected?.let { playlistStore.listEntries(it.id) }.orEmpty()
-                    val paths = previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
+                    val paths =
+                        previewAudioPaths(selected, entries, legacyImportedPath, isLocalFile)
                     PreviewAudioResolution.Ready(
                         audioUris =
                             paths.mapNotNull { path -> path?.let(::File)?.let(Uri::fromFile) },
