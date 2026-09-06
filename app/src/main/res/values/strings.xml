@@ -70,6 +70,14 @@
     <string name="warmly_playlist_load_failed">Playlists could not be loaded. Try again.</string>
     <string name="warmly_playlist_import_summary">Import results · Added: %1$d · Duplicates: %2$d · Unsupported: %3$d · Failed: %4$d</string>
     <string name="warmly_playlist_import_songs">Import songs</string>
+    <string name="warmly_imported_audio_title">Imported audio</string>
     <string name="warmly_playlist_preview">Preview wake</string>
+    <string name="warmly_preview_title">Time to wake gently</string>
+    <string name="warmly_preview_metrics">Progress %1$d%% · Screen %2$d%% · Music %3$d%%</string>
+    <string name="warmly_preview_progress">Preview progress</string>
+    <string name="warmly_preview_awake">I\'m awake</string>
+    <string name="warmly_preview_loading">Loading preview audio…</string>
+    <string name="warmly_preview_fallback">Imported music failed · Playing default alarm sound</string>
+    <string name="warmly_preview_failed">Unable to play preview audio</string>
     <string name="warmly_back">Back</string>
 </resources>

@@ -33,7 +33,7 @@ class GentleWakePreviewPlaybackControllerTest {
     private val defaultUri = Uri.parse("content://settings/system/alarm_alert")
 
     @Test
-    fun selectedPlaylistPathsStayOrderedAndKeepMissingPositions() {
+    fun selectedPlaylistPathsStayOrderedAndExcludeMissingSources() {
         val playlist = WakePlaylist(id = "playlist", name = "Morning")
         val entries =
             listOf(
@@ -65,7 +65,7 @@ class GentleWakePreviewPlaybackControllerTest {
                 isLocalFile = { it != "/missing" },
             )
 
-        assertEquals(listOf("/first", null, "/third"), paths)
+        assertEquals(listOf("/first", "/third"), paths)
     }
 
     @Test

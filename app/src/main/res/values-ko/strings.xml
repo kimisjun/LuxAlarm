@@ -70,6 +70,14 @@
     <string name="warmly_playlist_load_failed">플레이리스트를 불러오지 못했어요. 다시 시도해 주세요.</string>
     <string name="warmly_playlist_import_summary">가져오기 결과 · 추가: %1$d · 중복: %2$d · 미지원: %3$d · 실패: %4$d</string>
     <string name="warmly_playlist_import_songs">곡 가져오기</string>
+    <string name="warmly_imported_audio_title">가져온 오디오</string>
     <string name="warmly_playlist_preview">기상 미리보기</string>
+    <string name="warmly_preview_title">부드럽게 깨어날 시간이에요</string>
+    <string name="warmly_preview_metrics">진행 %1$d%% · 화면 %2$d%% · 음악 %3$d%%</string>
+    <string name="warmly_preview_progress">미리보기 진행도</string>
+    <string name="warmly_preview_awake">일어났어요</string>
+    <string name="warmly_preview_loading">미리보기 오디오 불러오는 중…</string>
+    <string name="warmly_preview_fallback">가져온 음악 재생 실패 · 기본 알람 소리 재생 중</string>
+    <string name="warmly_preview_failed">미리보기 소리를 재생할 수 없어요</string>
     <string name="warmly_back">뒤로</string>
 </resources>

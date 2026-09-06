@@ -25,6 +25,7 @@ class WakePlaylistDocumentResolver(
     titleFor: (String) -> String?,
     providedAudioStore: WakeAudioStore? = null,
     beforeImport: suspend () -> Unit = {},
+    fallbackTitle: String = "Imported audio",
 ) {
     private val audioStore = providedAudioStore ?: WakeAudioStore(storageDirectory, openDocument)
     private val importer =
@@ -32,6 +33,7 @@ class WakePlaylistDocumentResolver(
             localTrackImporter = LocalTrackImporter(audioStore, mimeTypeFor),
             playlistStore = playlistStore,
             beforeImport = beforeImport,
+            fallbackTitle = fallbackTitle,
             titleFor = titleFor,
         )
 
@@ -56,6 +58,7 @@ class WakePlaylistDocumentResolver(
             context: Context,
             playlistStore: WakePlaylistStore,
             ioDispatcher: CoroutineDispatcher = AppContainer.ioDispatcher,
+            fallbackTitle: String = "Imported audio",
         ): WakePlaylistDocumentResolver =
             WakePlaylistDocumentResolver(
                 storageDirectory = File(context.filesDir, "gentle-wake-audio"),
@@ -70,6 +73,7 @@ class WakePlaylistDocumentResolver(
                 titleFor = { documentUri -> displayNameFor(context, documentUri) },
                 providedAudioStore = AppContainer.wakeAudioStore,
                 beforeImport = AppContainer::reconcileWakeAudioBeforeImport,
+                fallbackTitle = fallbackTitle,
             )
     }
 }

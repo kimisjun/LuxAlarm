@@ -37,6 +37,7 @@ class WakePlaylistImporter(
     private val localTrackImporter: LocalTrackImporter,
     private val playlistStore: WakePlaylistStore,
     private val beforeImport: suspend () -> Unit = {},
+    private val fallbackTitle: String = "Imported audio",
     private val titleFor: (String) -> String?,
 ) {
     suspend fun importIntoPlaylist(
@@ -116,12 +117,8 @@ class WakePlaylistImporter(
 
     private fun safeTitleFor(documentUri: String): String =
         try {
-            titleFor(documentUri)?.trim().orEmpty().ifEmpty { FALLBACK_TITLE }
+            titleFor(documentUri)?.trim().orEmpty().ifEmpty { fallbackTitle }
         } catch (_: Exception) {
-            FALLBACK_TITLE
+            fallbackTitle
         }
-
-    private companion object {
-        const val FALLBACK_TITLE = "Imported audio"
-    }
 }

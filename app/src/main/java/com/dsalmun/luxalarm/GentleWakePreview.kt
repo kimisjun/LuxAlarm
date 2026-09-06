@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -60,7 +61,7 @@ fun GentleWakePreview(
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                text = "부드럽게 깨어날 시간이에요",
+                text = stringResource(R.string.warmly_preview_title),
                 color = Color.White,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -69,16 +70,19 @@ fun GentleWakePreview(
             Spacer(Modifier.height(16.dp))
             Text(
                 text =
-                    "진행 ${(frame.clampedProgress * 100).roundToInt()}% · " +
-                        "화면 ${(frame.screenBrightness * 100).roundToInt()}% · " +
-                        "음악 ${(frame.audioVolume * 100).roundToInt()}%",
+                    stringResource(
+                        R.string.warmly_preview_metrics,
+                        (frame.clampedProgress * 100).roundToInt(),
+                        (frame.screenBrightness * 100).roundToInt(),
+                        (frame.audioVolume * 100).roundToInt(),
+                    ),
                 color = Color.White.copy(alpha = 0.84f),
                 fontSize = 16.sp,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(20.dp))
             Text(
-                text = "미리보기 진행도",
+                text = stringResource(R.string.warmly_preview_progress),
                 color = Color.White.copy(alpha = 0.84f),
                 fontSize = 14.sp,
             )
@@ -107,7 +111,11 @@ fun GentleWakePreview(
                         contentColor = Color(0xFF5A2508),
                     ),
             ) {
-                Text(text = "일어났어요", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = stringResource(R.string.warmly_preview_awake),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
     }

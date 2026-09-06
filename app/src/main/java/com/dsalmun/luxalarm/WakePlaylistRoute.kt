@@ -54,9 +54,14 @@ fun WakePlaylistRoute(
     usePlatformNameDialog: Boolean = true,
 ) {
     val context = LocalContext.current
+    val importedAudioFallbackTitle = stringResource(R.string.warmly_imported_audio_title)
     val resolver =
-        remember(context, playlistStore) {
-            WakePlaylistDocumentResolver.production(context, playlistStore)
+        remember(context, playlistStore, importedAudioFallbackTitle) {
+            WakePlaylistDocumentResolver.production(
+                context = context,
+                playlistStore = playlistStore,
+                fallbackTitle = importedAudioFallbackTitle,
+            )
         }
     val factory =
         remember(playlistStore, resolver, importDocuments, ownedFileExists, deleteOwnedBytes) {
@@ -108,6 +113,7 @@ fun WakePlaylistRoute(
             progress = previewProgress,
             onProgressChange = { previewProgress = it },
             onAwake = { showPreview = false },
+            playlistStore = playlistStore,
         )
         return
     }

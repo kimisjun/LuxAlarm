@@ -322,6 +322,7 @@ class WakePlaylistImporterTest {
                     if (uri == "content://unsupported") "text/plain" else "audio/mpeg"
                 },
                 playlistStore,
+                fallbackTitle = "Imported audio",
             ) { uri ->
                 if (uri == "content://third") "Third.mp3" else "  "
             }
@@ -360,6 +361,7 @@ class WakePlaylistImporterTest {
                     "audio/ogg"
                 },
                 playlistStore,
+                fallbackTitle = "Imported audio",
             ) { uri ->
                 if (uri.endsWith("original")) "Original.ogg" else "Renamed.ogg"
             }
@@ -403,6 +405,7 @@ class WakePlaylistImporterTest {
                     "audio/mpeg"
                 },
                 playlistStore,
+                fallbackTitle = "Imported audio",
             ) {
                 "Birdsong.mp3"
             }
@@ -431,6 +434,7 @@ class WakePlaylistImporterTest {
                     "audio/mpeg"
                 },
                 playlistStore,
+                fallbackTitle = "가져온 오디오",
             ) {
                 error("display name provider unavailable")
             }
@@ -438,7 +442,7 @@ class WakePlaylistImporterTest {
         val result = importer.importIntoPlaylist(playlist.id, listOf("content://birds")).single()
 
         val added = assertIs<WakePlaylistImportResult.Added>(result)
-        assertEquals("Imported audio", added.entry.track.title)
+        assertEquals("가져온 오디오", added.entry.track.title)
         database.close()
     }
 
@@ -455,6 +459,7 @@ class WakePlaylistImporterTest {
                     "audio/mpeg"
                 },
                 playlistStore,
+                fallbackTitle = "Imported audio",
             ) {
                 "Birdsong.mp3"
             }

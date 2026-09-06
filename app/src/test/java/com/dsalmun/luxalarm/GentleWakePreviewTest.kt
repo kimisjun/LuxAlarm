@@ -14,16 +14,19 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.dsalmun.luxalarm.ui.theme.LuxAlarmTheme
+import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,7 +36,7 @@ class GentleWakePreviewTest {
     @get:Rule val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun halfProgressUsesTheRampAndOffersALargeKoreanConfirmation() {
+    fun halfProgressUsesTheRampAndOffersALargeConfirmation() {
         var confirmations = 0
         composeRule.setContent {
             LuxAlarmTheme(dynamicColor = false) {
@@ -41,16 +44,56 @@ class GentleWakePreviewTest {
             }
         }
 
-        composeRule.onNodeWithText("부드럽게 깨어날 시간이에요").assertIsDisplayed()
-        composeRule.onNodeWithText("진행 50% · 화면 51% · 음악 20%").assertIsDisplayed()
+        composeRule.onNodeWithText("Time to wake gently").assertIsDisplayed()
+        composeRule.onNodeWithText("Progress 50% · Screen 51% · Music 20%").assertIsDisplayed()
         composeRule.onNodeWithTag("gentle-wake-preview").assertIsDisplayed()
         composeRule
-            .onNodeWithText("일어났어요")
+            .onNodeWithText("I'm awake")
             .assertWidthIsAtLeast(240.dp)
             .assertHeightIsAtLeast(64.dp)
             .performClick()
 
         assertEquals(1, confirmations)
+    }
+
+    @Test
+    fun previewUsesEnglishResourcesInTheBaseLocale() {
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreview(progress = 0.5f, onAwake = {})
+            }
+        }
+
+        composeRule.onNodeWithText("Time to wake gently").assertIsDisplayed()
+        composeRule.onNodeWithText("Progress 50% · Screen 51% · Music 20%").assertIsDisplayed()
+        composeRule.onNodeWithText("Preview progress").assertIsDisplayed()
+        composeRule.onNodeWithText("I'm awake").assertIsDisplayed()
+    }
+
+    @Test
+    fun previewResourcesIncludeKoreanTranslations() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val configuration =
+            android.content.res.Configuration(context.resources.configuration).apply {
+                setLocale(Locale.KOREAN)
+            }
+        val localized = context.createConfigurationContext(configuration)
+
+        assertEquals("부드럽게 깨어날 시간이에요", localized.getString(R.string.warmly_preview_title))
+        assertEquals("일어났어요", localized.getString(R.string.warmly_preview_awake))
+        assertEquals(
+            "미리보기 오디오 불러오는 중…",
+            localized.getString(R.string.warmly_preview_loading),
+        )
+        assertEquals(
+            "가져온 음악 재생 실패 · 기본 알람 소리 재생 중",
+            localized.getString(R.string.warmly_preview_fallback),
+        )
+        assertEquals(
+            "미리보기 소리를 재생할 수 없어요",
+            localized.getString(R.string.warmly_preview_failed),
+        )
+        assertEquals("가져온 오디오", localized.getString(R.string.warmly_imported_audio_title))
     }
 
     @Test
@@ -70,7 +113,7 @@ class GentleWakePreviewTest {
             .onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress))
             .performSemanticsAction(SemanticsActions.SetProgress) { it(0.75f) }
 
-        composeRule.onNodeWithText("진행 75% · 화면 85% · 음악 30%").assertIsDisplayed()
+        composeRule.onNodeWithText("Progress 75% · Screen 85% · Music 30%").assertIsDisplayed()
     }
 
     @Test
@@ -91,6 +134,143 @@ class GentleWakePreviewTest {
         }
 
         composeRule.runOnIdle { assertEquals(listOf(firstUri), factory.requestedUris) }
+    }
+
+    @Test
+    fun resolvingRouteCreatesNoPlayerUntilStoreResolutionThenStartsOnlySelectedFirstSource() {
+        val selected = WakePlaylist("selected", "Morning")
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val firstUri = Uri.parse("file:///private/first")
+        val secondUri = Uri.parse("file:///private/second")
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                selected,
+                listOf(
+                    WakePlaylistEntry(
+                        "second",
+                        selected.id,
+                        WakeTrack("track-2", "Second", secondUri.path!!),
+                        1,
+                    ),
+                    WakePlaylistEntry(
+                        "first",
+                        selected.id,
+                        WakeTrack("track-1", "First", firstUri.path!!),
+                        0,
+                    ),
+                ),
+            )
+        val factory = PreviewRecordingFactory()
+        val globalStore =
+            PreviewDeferredPlaylistStore(
+                CompletableDeferred(),
+                WakePlaylist("global", "Wrong"),
+                emptyList(),
+            )
+        AppContainer.wakePlaylistStore = globalStore
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Loading preview audio…").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
+
+        selection.complete(selected)
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertEquals(listOf(firstUri), factory.requestedUris)
+            assertEquals(1, store.selectionCalls)
+            assertEquals(0, globalStore.selectionCalls)
+        }
+    }
+
+    @Test
+    fun leavingBeforePlaylistResolutionNeverStartsPlayback() {
+        val selected = WakePlaylist("selected", "Morning")
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                selected,
+                listOf(
+                    WakePlaylistEntry(
+                        "entry",
+                        selected.id,
+                        WakeTrack("track", "First", "/private/first"),
+                        0,
+                    )
+                ),
+            )
+        val factory = PreviewRecordingFactory()
+        val visible = mutableStateOf(true)
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                if (visible.value) {
+                    GentleWakePreviewRoute(
+                        progress = 0f,
+                        onAwake = {},
+                        playlistStore = store,
+                        legacyImportedPath = "/private/legacy",
+                        isLocalFile = { true },
+                        defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
+                        playerFactory = factory,
+                    )
+                }
+            }
+        }
+
+        composeRule.runOnIdle { visible.value = false }
+        selection.complete(selected)
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
+    }
+
+    @Test
+    fun resolutionFailureStartsOnlyTheDefaultFallbackAfterFailure() {
+        val selection = CompletableDeferred<WakePlaylist?>()
+        val store =
+            PreviewDeferredPlaylistStore(
+                selection,
+                WakePlaylist("unused", "Unused"),
+                emptyList(),
+            )
+        val defaultUri = Uri.parse("content://settings/system/alarm_alert")
+        val factory = PreviewRecordingFactory()
+
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistStore = store,
+                    legacyImportedPath = "/private/legacy",
+                    isLocalFile = { true },
+                    defaultAlarmUri = defaultUri,
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        composeRule.runOnIdle { assertEquals(emptyList(), factory.requestedUris) }
+        selection.completeExceptionally(IllegalStateException("database unavailable"))
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle { assertEquals(listOf(defaultUri), factory.requestedUris) }
     }
 
     @Test
@@ -124,7 +304,7 @@ class GentleWakePreviewTest {
             assertEquals(WakeRamp.frameAt(0.75f).audioVolume, factory.player.lastVolume)
         }
 
-        composeRule.onNodeWithText("일어났어요").performClick()
+        composeRule.onNodeWithText("I'm awake").performClick()
 
         composeRule.runOnIdle {
             assertTrue(factory.player.stopped)
@@ -159,7 +339,7 @@ class GentleWakePreviewTest {
     }
 
     @Test
-    fun routeDisplaysTheKoreanFallbackStateWhenImportedCreationFails() {
+    fun routeDisplaysTheLocalizedFallbackStateWhenImportedCreationFails() {
         val importedUri = Uri.parse("file:///private/selected-audio")
         val defaultUri = Uri.parse("content://settings/system/alarm_alert")
         val factory = PreviewRecordingFactory(failingUri = importedUri)
@@ -175,12 +355,14 @@ class GentleWakePreviewTest {
             }
         }
 
-        composeRule.onNodeWithText("가져온 음악 재생 실패 · 기본 알람 소리 재생 중").assertIsDisplayed()
+        composeRule
+            .onNodeWithText("Imported music failed · Playing default alarm sound")
+            .assertIsDisplayed()
         assertEquals(listOf(importedUri, defaultUri), factory.requestedUris)
     }
 
     @Test
-    fun routeDisplaysTheKoreanFailureStateWhenNoPlayerCanBeCreated() {
+    fun routeDisplaysTheLocalizedFailureStateWhenNoPlayerCanBeCreated() {
         val defaultUri = Uri.parse("content://settings/system/alarm_alert")
         val factory = PreviewRecordingFactory(failAll = true)
         composeRule.setContent {
@@ -195,7 +377,7 @@ class GentleWakePreviewTest {
             }
         }
 
-        composeRule.onNodeWithText("미리보기 소리를 재생할 수 없어요").assertIsDisplayed()
+        composeRule.onNodeWithText("Unable to play preview audio").assertIsDisplayed()
     }
 
     private class PreviewRecordingFactory(
@@ -237,4 +419,49 @@ class GentleWakePreviewTest {
             released = true
         }
     }
+}
+
+private class PreviewDeferredPlaylistStore(
+    private val selection: CompletableDeferred<WakePlaylist?>,
+    private val expectedPlaylist: WakePlaylist,
+    private val entries: List<WakePlaylistEntry>,
+) : WakePlaylistStore {
+    var selectionCalls = 0
+        private set
+
+    override suspend fun selectedPlaylistForWake(): WakePlaylist? {
+        selectionCalls++
+        return selection.await()
+    }
+
+    override suspend fun listEntries(playlistId: String): List<WakePlaylistEntry> {
+        assertEquals(expectedPlaylist.id, playlistId)
+        return entries
+    }
+
+    override suspend fun createPlaylist(name: String): WakePlaylist = error("Not needed")
+
+    override suspend fun listPlaylists(): List<WakePlaylist> = error("Not needed")
+
+    override suspend fun renamePlaylist(playlistId: String, name: String) = error("Not needed")
+
+    override suspend fun selectPlaylistForWake(playlistId: String) = error("Not needed")
+
+    override suspend fun addTrackToLibrary(title: String, storedPath: String): WakeTrack =
+        error("Not needed")
+
+    override suspend fun registerTrackInPlaylist(
+        playlistId: String,
+        track: WakeTrack,
+    ): WakePlaylistRegistration = error("Not needed")
+
+    override suspend fun listLibraryTracks(): List<WakeTrack> = error("Not needed")
+
+    override suspend fun addTrack(playlistId: String, trackId: String): WakePlaylistEntry =
+        error("Not needed")
+
+    override suspend fun removeTrack(playlistId: String, trackId: String) = error("Not needed")
+
+    override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) =
+        error("Not needed")
 }
