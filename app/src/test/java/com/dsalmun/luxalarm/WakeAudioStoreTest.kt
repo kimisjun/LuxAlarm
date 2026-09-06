@@ -7,6 +7,7 @@ package com.dsalmun.luxalarm
 
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.util.UUID
@@ -18,6 +19,102 @@ import kotlin.test.assertTrue
 import org.junit.Test
 
 class WakeAudioStoreTest {
+    @Test
+    fun freshStorageDirectoriesAreCreatedOneLevelAtATimeAndEachParentIsSynced() {
+        val parent = File("build/test-audio").apply { mkdirs() }
+        val root = File(parent, UUID.randomUUID().toString())
+        val synced = mutableListOf<File>()
+        val store =
+            WakeAudioStore(root, syncDirectory = { synced += it }) {
+                ByteArrayInputStream("audio".encodeToByteArray())
+            }
+
+        val pending = store.prepareDocument("content://audio")
+
+        assertEquals(listOf(parent, root, File(root, "tracks")), synced.take(3))
+        pending.rollback(false)
+    }
+
+    @Test
+    fun existingStorageDirectoriesNeedNoCreationSync() {
+        val root = File("build/test-audio/${UUID.randomUUID()}")
+        File(root, "tracks").mkdirs()
+        val synced = mutableListOf<File>()
+        val store =
+            WakeAudioStore(root, syncDirectory = { synced += it }) {
+                ByteArrayInputStream("audio".encodeToByteArray())
+            }
+
+        store.prepareDocument("content://audio")
+
+        assertEquals(File(root, "tracks"), synced.first())
+    }
+
+    @Test
+    fun directoryCreationSyncFailureBlocksPublicationAndRemovesNewEmptyDirectories() {
+        val parent = File("build/test-audio").apply { mkdirs() }
+        val root = File(parent, UUID.randomUUID().toString())
+        val store =
+            WakeAudioStore(
+                root,
+                syncDirectory = { directory ->
+                    if (directory == parent) error("root durability failed")
+                },
+            ) {
+                ByteArrayInputStream("audio".encodeToByteArray())
+            }
+
+        val failure = runCatching { store.prepareDocument("content://audio") }.exceptionOrNull()
+
+        assertEquals("root durability failed", failure?.message)
+        assertFalse(root.exists())
+    }
+
+    @Test
+    fun existingStorageUnderSymlinkedAncestorIsRejectedBeforeTracksCreation() {
+        val base = File("build/test-audio/${UUID.randomUUID()}").apply { mkdirs() }
+        val outsideStorage = File(base, "outside/storage").apply { mkdirs() }
+        val link = File(base, "link")
+        Files.createSymbolicLink(link.toPath(), File(base, "outside").toPath().toAbsolutePath())
+        val store = WakeAudioStore(File(link, "storage")) { ByteArrayInputStream(byteArrayOf(1)) }
+
+        val failure = runCatching { store.prepareDocument("content://audio") }.exceptionOrNull()
+
+        assertTrue(failure != null)
+        assertFalse(File(outsideStorage, "tracks").exists())
+    }
+
+    @Test
+    fun emptyDocumentsAreRejectedWithoutPublishingAHashFile() {
+        val root = File("build/test-audio/${UUID.randomUUID()}")
+        val store = WakeAudioStore(root) { ByteArrayInputStream(byteArrayOf()) }
+
+        val failure = runCatching { store.prepareDocument("content://empty") }.exceptionOrNull()
+
+        assertIs<IOException>(failure)
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+    }
+
+    @Test
+    fun oversizedDocumentsStopAtTheStreamingBoundAndLeaveNoPublishedBytes() {
+        val root = File("build/test-audio/${UUID.randomUUID()}")
+        var reads = 0
+        val source =
+            object : java.io.InputStream() {
+                override fun read(): Int {
+                    reads += 1
+                    return 1
+                }
+            }
+        val store = WakeAudioStore(root, maxImportBytes = 4) { source }
+
+        val failure = runCatching { store.prepareDocument("content://large") }.exceptionOrNull()
+
+        assertIs<IOException>(failure)
+        assertEquals(5, reads)
+        assertEquals(emptyList(), File(root, "tracks").listFiles().orEmpty().toList())
+    }
+
     @Test
     fun importUsesSha256IdentityUnderImmutableTracksDirectory() {
         val root = File("build/test-audio/${UUID.randomUUID()}")
@@ -146,8 +243,16 @@ class WakeAudioStoreTest {
 
         store.storeDocument("content://audio")
 
-        assertEquals(3, synced.size)
-        assertTrue(synced.all { it == File(root, "tracks") })
+        assertEquals(
+            listOf(
+                root.parentFile,
+                root,
+                File(root, "tracks"),
+                File(root, "tracks"),
+                File(root, "tracks"),
+            ),
+            synced,
+        )
     }
 
     @Test

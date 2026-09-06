@@ -66,6 +66,67 @@ class WakePlaylistImporterTest {
     }
 
     @Test
+    fun playlistDeletedDuringPreImportReconciliationIsRejectedBeforeOpeningDocument() = runTest {
+        val playlistStore = MutablePlaylistStore()
+        var opened = false
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) {
+                        opened = true
+                        ByteArrayInputStream("audio".encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                playlistStore,
+                beforeImport = { playlistStore.exists = false },
+            ) {
+                "Track.mp3"
+            }
+
+        val result = importer.importIntoPlaylist("playlist", listOf("content://track"))
+
+        assertIs<WakePlaylistImportResult.Failed>(result.single())
+        assertFalse(opened)
+    }
+
+    @Test
+    fun injectedTransactionCoversPreparationRegistrationAndPendingCommit() = runTest {
+        val playlistStore = MutablePlaylistStore()
+        val events = mutableListOf<String>()
+        val importer =
+            WakePlaylistImporter(
+                LocalTrackImporter(
+                    WakeAudioStore(root) {
+                        events += "prepare"
+                        ByteArrayInputStream("audio".encodeToByteArray())
+                    }
+                ) {
+                    "audio/mpeg"
+                },
+                playlistStore,
+                transaction = { operation ->
+                    events += "transaction-enter"
+                    val result = operation()
+                    assertFalse(File(root, "tracks/.import.pending").exists())
+                    events += "transaction-exit"
+                    result
+                },
+            ) {
+                "Track.mp3"
+            }
+
+        importer.importIntoPlaylist("playlist", listOf("content://track"))
+
+        assertEquals(
+            listOf("transaction-enter", "prepare", "transaction-exit"),
+            events,
+        )
+        assertEquals(1, playlistStore.registrations)
+    }
+
+    @Test
     fun eachDocumentIsRegisteredBeforeTheNextDocumentIsCopied() = runTest {
         val database = open()
         val roomStore = RoomWakePlaylistStore(database)
@@ -476,4 +537,40 @@ class WakePlaylistImporterTest {
 
     private fun open(): WarmlyDatabase =
         Room.databaseBuilder(context, WarmlyDatabase::class.java, databaseName).build()
+}
+
+private class MutablePlaylistStore : WakePlaylistStore {
+    var exists = true
+    var registrations = 0
+
+    override suspend fun createPlaylist(name: String) = error("unused")
+
+    override suspend fun listPlaylists() =
+        if (exists) listOf(WakePlaylist("playlist", "Morning")) else emptyList()
+
+    override suspend fun renamePlaylist(playlistId: String, name: String) = Unit
+
+    override suspend fun selectPlaylistForWake(playlistId: String) = Unit
+
+    override suspend fun selectedPlaylistForWake(): WakePlaylist? = null
+
+    override suspend fun addTrackToLibrary(title: String, storedPath: String) = error("unused")
+
+    override suspend fun registerTrackInPlaylist(
+        playlistId: String,
+        track: WakeTrack,
+    ): WakePlaylistRegistration {
+        registrations += 1
+        return WakePlaylistRegistration.Added(WakePlaylistEntry("entry", playlistId, track, 0))
+    }
+
+    override suspend fun listLibraryTracks(): List<WakeTrack> = emptyList()
+
+    override suspend fun addTrack(playlistId: String, trackId: String) = error("unused")
+
+    override suspend fun removeTrack(playlistId: String, trackId: String) = Unit
+
+    override suspend fun moveTrack(playlistId: String, trackId: String, position: Int) = Unit
+
+    override suspend fun listEntries(playlistId: String): List<WakePlaylistEntry> = emptyList()
 }

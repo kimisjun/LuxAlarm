@@ -87,19 +87,25 @@ fun SettingsScreen(
     var sliderValue by remember(requiredLuxLevel) { mutableFloatStateOf(requiredLuxLevel) }
     val scope = rememberCoroutineScope()
     val audioStore = AppContainer.wakeAudioStore
+    val legacyAudioImporter =
+        remember(audioStore, settingsManager) {
+            LegacyWakeAudioImporter(
+                audioStore,
+                settingsManager,
+                transaction = { operation ->
+                    AppContainer.withWakeAudioImportTransaction(operation)
+                },
+            )
+        }
     val audioPicker =
         rememberLauncherForActivityResult(WakeAudioDocumentContract()) { documentUri ->
             if (documentUri != null) {
                 val profileAtSelection = settingsManager.getWakeProfile()
                 scope.launch {
-                    val imported =
-                        withContext(Dispatchers.IO) {
-                            runCatching { audioStore.importDocument(documentUri) }
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            legacyAudioImporter.importDocument(documentUri, profileAtSelection)
                         }
-                    imported.onSuccess { source ->
-                        settingsManager.updateWakeProfile(
-                            profileAtSelection.copy(importedAudioPath = source.path)
-                        )
                     }
                 }
             }

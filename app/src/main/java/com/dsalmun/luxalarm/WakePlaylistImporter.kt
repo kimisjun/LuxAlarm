@@ -37,27 +37,32 @@ class WakePlaylistImporter(
     private val localTrackImporter: LocalTrackImporter,
     private val playlistStore: WakePlaylistStore,
     private val beforeImport: suspend () -> Unit = {},
+    private val transaction:
+        suspend (suspend () -> List<WakePlaylistImportResult>) -> List<WakePlaylistImportResult> =
+        { operation ->
+            operation()
+        },
     private val fallbackTitle: String = "Imported audio",
     private val titleFor: (String) -> String?,
 ) {
     suspend fun importIntoPlaylist(
         playlistId: String,
         documentUris: List<String>,
-    ): List<WakePlaylistImportResult> {
+    ): List<WakePlaylistImportResult> = transaction {
+        try {
+            beforeImport()
+        } catch (cause: Exception) {
+            return@transaction documentUris.map { WakePlaylistImportResult.Failed(it, cause) }
+        }
         if (playlistStore.listPlaylists().none { it.id == playlistId }) {
-            return documentUris.map { documentUri ->
+            return@transaction documentUris.map { documentUri ->
                 WakePlaylistImportResult.Failed(
                     documentUri,
                     IllegalArgumentException("Playlist does not exist: $playlistId"),
                 )
             }
         }
-        try {
-            beforeImport()
-        } catch (cause: Exception) {
-            return documentUris.map { WakePlaylistImportResult.Failed(it, cause) }
-        }
-        return documentUris.map { documentUri ->
+        documentUris.map { documentUri ->
             when (val preparation = localTrackImporter.prepareDocument(documentUri)) {
                 is LocalTrackPreparation.Ready ->
                     registerPrepared(playlistId, preparation.documentUri, preparation.pending)

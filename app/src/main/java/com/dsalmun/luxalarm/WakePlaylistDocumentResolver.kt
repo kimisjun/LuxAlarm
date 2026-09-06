@@ -25,6 +25,11 @@ class WakePlaylistDocumentResolver(
     titleFor: (String) -> String?,
     providedAudioStore: WakeAudioStore? = null,
     beforeImport: suspend () -> Unit = {},
+    transaction:
+        suspend (suspend () -> List<WakePlaylistImportResult>) -> List<WakePlaylistImportResult> =
+        { operation ->
+            operation()
+        },
     fallbackTitle: String = "Imported audio",
 ) {
     private val audioStore =
@@ -35,6 +40,7 @@ class WakePlaylistDocumentResolver(
             localTrackImporter = LocalTrackImporter(audioStore, mimeTypeFor),
             playlistStore = playlistStore,
             beforeImport = beforeImport,
+            transaction = transaction,
             fallbackTitle = fallbackTitle,
             titleFor = titleFor,
         )
@@ -76,7 +82,9 @@ class WakePlaylistDocumentResolver(
                 },
                 titleFor = { documentUri -> displayNameFor(context, documentUri) },
                 providedAudioStore = AppContainer.wakeAudioStore,
-                beforeImport = AppContainer::reconcileWakeAudioBeforeImport,
+                transaction = { operation ->
+                    AppContainer.withWakeAudioImportTransaction(operation)
+                },
                 fallbackTitle = fallbackTitle,
             )
     }

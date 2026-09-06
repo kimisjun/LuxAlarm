@@ -10,6 +10,7 @@ import android.content.Context
 import androidx.core.content.edit
 import androidx.test.core.app.ApplicationProvider
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -98,6 +99,17 @@ class SettingsManagerTest {
 
         assertEquals(300f, fresh.getRequiredLuxLevel())
         assertEquals(300f, fresh.requiredLuxLevel.value, "The StateFlow is seeded from storage")
+    }
+
+    @Test
+    fun durableWakeProfileCommitReportsFailureWithoutPublishingInMemoryState() {
+        val manager = SettingsManager(context, commitEditor = { false })
+        val updated = manager.getWakeProfile().copy(importedAudioPath = "/owned/audio")
+
+        assertFalse(manager.commitWakeProfile(updated))
+
+        assertEquals(null, manager.wakeProfile.value.importedAudioPath)
+        assertEquals(null, SettingsManager(context).getWakeProfile().importedAudioPath)
     }
 
     /** The StateFlow is per-instance; harmless while [AppContainer] builds exactly one. */

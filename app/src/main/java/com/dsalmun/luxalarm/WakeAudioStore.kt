@@ -60,6 +60,7 @@ class WakeAudioStore(
     private val storageDirectory: File,
     private val syncDirectory: (File) -> Unit = ::forceDirectory,
     private val syncFile: (FileChannel) -> Unit = { it.force(true) },
+    private val maxImportBytes: Long = MAX_IMPORT_BYTES,
     private val openDocument: (String) -> InputStream?,
 ) {
     data class OwnedTrack(
@@ -201,7 +202,7 @@ class WakeAudioStore(
                     .use { channel ->
                         val hashingOutput =
                             DigestOutputStream(Channels.newOutputStream(channel), digest)
-                        source.copyTo(hashingOutput)
+                        copyBounded(source, hashingOutput)
                         hashingOutput.flush()
                         syncFile(channel)
                     }
@@ -312,14 +313,89 @@ class WakeAudioStore(
         return target
     }
 
-    private fun ensureTracksDirectory(): File =
-        tracksDirectory().also { directory ->
-            val path = directory.toPath()
-            check(!Files.isSymbolicLink(path)) { "Wake audio storage cannot be a symlink" }
-            check(directory.mkdirs() || Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) {
-                "Cannot create wake audio storage"
+    private fun ensureTracksDirectory(): File {
+        val created = mutableListOf<File>()
+        try {
+            ensureStorageDirectory(created)
+            val tracks = tracksDirectory()
+            ensureDirectory(tracks, created)
+            return tracks
+        } catch (cause: Exception) {
+            created.asReversed().forEach { directory ->
+                if (directory.delete()) {
+                    directory.parentFile?.let { parent ->
+                        runCatching { syncDirectory(parent) }.onFailure(cause::addSuppressed)
+                    }
+                }
             }
+            throw cause
         }
+    }
+
+    private fun ensureStorageDirectory(created: MutableList<File>) {
+        val missing = mutableListOf<File>()
+        var candidate: File? = storageDirectory
+        while (candidate != null && !Files.exists(candidate.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            missing += candidate
+            candidate = candidate.parentFile
+        }
+        check(candidate != null) { "Wake audio storage parent is missing" }
+        var existing: File? = candidate
+        while (existing != null) {
+            val existingPath = existing.toPath()
+            check(
+                Files.exists(existingPath, LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(existingPath) &&
+                    Files.isDirectory(existingPath, LinkOption.NOFOLLOW_LINKS)
+            ) {
+                "Wake audio storage parent is unsafe"
+            }
+            existing = existing.parentFile
+        }
+        missing.asReversed().forEach { ensureDirectory(it, created) }
+    }
+
+    private fun ensureDirectory(directory: File, created: MutableList<File>) {
+        val path = directory.toPath()
+        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+            check(
+                !Files.isSymbolicLink(path) && Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
+            ) {
+                "Wake audio storage is unsafe"
+            }
+            return
+        }
+        val parent = directory.parentFile ?: error("Wake audio storage parent is missing")
+        val parentPath = parent.toPath()
+        check(
+            Files.exists(parentPath, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(parentPath) &&
+                Files.isDirectory(parentPath, LinkOption.NOFOLLOW_LINKS)
+        ) {
+            "Wake audio storage parent is missing or unsafe"
+        }
+        Files.createDirectory(path)
+        created += directory
+        syncDirectory(parent)
+    }
+
+    private fun copyBounded(source: InputStream, destination: java.io.OutputStream) {
+        require(maxImportBytes > 0) { "Wake audio import bound must be positive" }
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var copied = 0L
+        while (true) {
+            val remainingWithSentinel = maxImportBytes - copied + 1
+            val read =
+                source.read(buffer, 0, minOf(buffer.size.toLong(), remainingWithSentinel).toInt())
+            if (read < 0) break
+            if (read == 0) continue
+            if (copied + read > maxImportBytes)
+                throw IOException("Wake audio document is too large")
+            destination.write(buffer, 0, read)
+            copied += read
+        }
+        if (copied == 0L) throw IOException("Wake audio document is empty")
+    }
 
     private fun tracksDirectory() = File(storageDirectory, TRACKS_DIRECTORY_NAME)
 
@@ -344,6 +420,7 @@ class WakeAudioStore(
     }
 
     private companion object {
+        const val MAX_IMPORT_BYTES = 100L * 1024 * 1024
         const val TRACKS_DIRECTORY_NAME = "tracks"
         const val PENDING_FILE_NAME = ".import.pending"
         const val STAGING_FILE_NAME = ".import.staging"

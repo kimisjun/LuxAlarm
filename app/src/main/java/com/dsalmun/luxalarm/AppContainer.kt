@@ -35,8 +35,9 @@ class AppContainer : Application() {
         @VisibleForTesting var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 
         @VisibleForTesting internal var startupReconciliationJob: Job? = null
+        private val wakeAudioTransactions = WakeAudioTransactionCoordinator()
 
-        suspend fun reconcileWakeAudio(): WakeAudioStore.ReconciliationReport {
+        private suspend fun reconcileWakeAudioUnlocked(): WakeAudioStore.ReconciliationReport {
             val referencedIds =
                 wakePlaylistStore.listLibraryTracks().mapNotNullTo(mutableSetOf()) {
                     wakeAudioStore.ownedTrackId(it.storedPath)
@@ -49,10 +50,18 @@ class AppContainer : Application() {
             return wakeAudioStore.reconcile(referencedIds)
         }
 
-        /** Startup stays nonblocking, while every import waits for and repeats reconciliation. */
-        suspend fun reconcileWakeAudioBeforeImport() {
+        suspend fun reconcileWakeAudio(): WakeAudioStore.ReconciliationReport =
+            wakeAudioTransactions.withTransaction {
+                reconcileWakeAudioUnlocked()
+            }
+
+        /** Joins startup before locking, so startup reconciliation can never deadlock an import. */
+        suspend fun <T> withWakeAudioImportTransaction(block: suspend () -> T): T {
             startupReconciliationJob?.join()
-            reconcileWakeAudio()
+            return wakeAudioTransactions.withTransaction {
+                reconcileWakeAudioUnlocked()
+                block()
+            }
         }
     }
 

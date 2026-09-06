@@ -20,7 +20,10 @@ data class WakeProfile(
     val importedAudioPath: String? = null,
 )
 
-class SettingsManager(context: Context) {
+class SettingsManager(
+    context: Context,
+    private val commitEditor: (SharedPreferences.Editor) -> Boolean = { it.commit() },
+) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
@@ -61,6 +64,21 @@ class SettingsManager(context: Context) {
             putString(KEY_WAKE_IMPORTED_AUDIO_PATH, profile.importedAudioPath)
         }
         _wakeProfile.value = profile
+    }
+
+    /** Durably publishes an imported-file reference before its pending marker may be cleared. */
+    fun commitWakeProfile(profile: WakeProfile): Boolean {
+        val editor =
+            prefs
+                .edit()
+                .putInt(KEY_WAKE_RAMP_MINUTES, profile.rampMinutes)
+                .putFloat(KEY_WAKE_START_VOLUME, profile.startVolume)
+                .putFloat(KEY_WAKE_MAX_VOLUME, profile.maxVolume)
+                .putString(KEY_WAKE_DISMISSAL, profile.dismissal.name)
+                .putString(KEY_WAKE_IMPORTED_AUDIO_PATH, profile.importedAudioPath)
+        val committed = commitEditor(editor)
+        if (committed) _wakeProfile.value = profile
+        return committed
     }
 
     companion object {
