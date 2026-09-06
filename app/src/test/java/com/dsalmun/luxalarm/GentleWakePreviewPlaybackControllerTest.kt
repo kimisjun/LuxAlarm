@@ -13,6 +13,7 @@ import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import org.junit.After
@@ -30,6 +31,79 @@ import org.robolectric.shadows.util.DataSource
 class GentleWakePreviewPlaybackControllerTest {
     private val importedUri = Uri.parse("file:///private/selected-audio")
     private val defaultUri = Uri.parse("content://settings/system/alarm_alert")
+
+    @Test
+    fun selectedPlaylistPathsStayOrderedAndKeepMissingPositions() {
+        val playlist = WakePlaylist(id = "playlist", name = "Morning")
+        val entries =
+            listOf(
+                WakePlaylistEntry(
+                    "third-entry",
+                    playlist.id,
+                    WakeTrack("third", "Third", "/third"),
+                    2,
+                ),
+                WakePlaylistEntry(
+                    "first-entry",
+                    playlist.id,
+                    WakeTrack("first", "First", "/first"),
+                    0,
+                ),
+                WakePlaylistEntry(
+                    "missing-entry",
+                    playlist.id,
+                    WakeTrack("missing", "Missing", "/missing"),
+                    1,
+                ),
+            )
+
+        val paths =
+            previewAudioPaths(
+                selectedPlaylist = playlist,
+                entries = entries,
+                legacyImportedPath = "/legacy",
+                isLocalFile = { it != "/missing" },
+            )
+
+        assertEquals(listOf("/first", null, "/third"), paths)
+    }
+
+    @Test
+    fun selectedPlaylistStartsInItsPersistedOrder() {
+        val secondImportedUri = Uri.parse("file:///private/second-selected-audio")
+        val factory = RecordingFactory()
+        val controller =
+            GentleWakePreviewPlaybackController(
+                playlistAudioUris = listOf(importedUri, secondImportedUri),
+                defaultAlarmUri = defaultUri,
+                playerFactory = factory,
+            )
+
+        val state = controller.start(progress = 0.5f)
+
+        assertEquals(GentleWakePreviewPlaybackState.PlayingImported, state)
+        assertEquals(listOf(importedUri), factory.requestedUris)
+    }
+
+    @Test
+    fun playlistCompletionAdvancesThroughThePreviewController() {
+        val secondImportedUri = Uri.parse("file:///private/second-selected-audio")
+        val factory = RecordingFactory()
+        val states = mutableListOf<GentleWakePreviewPlaybackState>()
+        val controller =
+            GentleWakePreviewPlaybackController(
+                playlistAudioUris = listOf(importedUri, secondImportedUri),
+                defaultAlarmUri = defaultUri,
+                playerFactory = factory,
+                onStateChange = states::add,
+            )
+        controller.start(progress = 0.5f)
+
+        factory.players.single().complete()
+
+        assertEquals(listOf(importedUri, secondImportedUri), factory.requestedUris)
+        assertEquals(GentleWakePreviewPlaybackState.PlayingImported, states.last())
+    }
 
     @Test
     fun selectedImportedMusicStartsFirstAtTheRampVolume() {
@@ -124,6 +198,13 @@ class GentleWakePreviewPlaybackControllerTest {
         val volumeUpdates = mutableListOf<Float>()
         var stopCount = 0
         var releaseCount = 0
+        private var completionListener: () -> Unit = {}
+
+        fun complete() = completionListener()
+
+        override fun setOnCompletionListener(listener: () -> Unit) {
+            completionListener = listener
+        }
 
         override fun setVolume(volume: Float) {
             volumeUpdates += volume
@@ -150,6 +231,29 @@ class GentleWakePreviewPlaybackControllerTest {
     @After
     fun tearDownAndroidFactory() {
         ShadowMediaPlayer.setCreateListener(null)
+    }
+
+    @Test
+    fun androidFactoryCanCreateANonLoopingPlayerForPlaylistAdvance() {
+        val importedFile =
+            File(context.filesDir, "gentle-wake-audio/playlist-track").apply {
+                parentFile!!.mkdirs()
+                writeBytes(byteArrayOf(1, 2, 3, 4))
+            }
+        val fileUri = Uri.fromFile(importedFile)
+        ShadowMediaPlayer.addMediaInfo(
+            DataSource.toDataSource(context, fileUri),
+            ShadowMediaPlayer.MediaInfo(5_000, 0),
+        )
+
+        val previewPlayer =
+            AndroidGentleWakePreviewPlayerFactory(context)
+                .create(fileUri, initialVolume = 0.2f, looping = false)
+
+        assertNotNull(previewPlayer)
+        assertFalse(createdPlayers.single().isLooping)
+        previewPlayer.stop()
+        previewPlayer.release()
     }
 
     @Test

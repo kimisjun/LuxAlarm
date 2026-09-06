@@ -74,6 +74,26 @@ class GentleWakePreviewTest {
     }
 
     @Test
+    fun routePreviewsAnOrderedPlaylistFromItsFirstTrack() {
+        val firstUri = Uri.parse("file:///private/first")
+        val secondUri = Uri.parse("file:///private/second")
+        val factory = PreviewRecordingFactory()
+        composeRule.setContent {
+            LuxAlarmTheme(dynamicColor = false) {
+                GentleWakePreviewRoute(
+                    progress = 0f,
+                    onAwake = {},
+                    playlistAudioUris = listOf(firstUri, secondUri),
+                    defaultAlarmUri = Uri.parse("content://settings/system/alarm_alert"),
+                    playerFactory = factory,
+                )
+            }
+        }
+
+        composeRule.runOnIdle { assertEquals(listOf(firstUri), factory.requestedUris) }
+    }
+
+    @Test
     fun routePlaysTheImportedMusicAndReleasesItWhenThePreviewCloses() {
         val importedUri = Uri.parse("file:///private/selected-audio")
         val defaultUri = Uri.parse("content://settings/system/alarm_alert")

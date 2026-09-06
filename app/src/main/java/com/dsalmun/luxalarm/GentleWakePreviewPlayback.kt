@@ -16,6 +16,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -25,6 +26,10 @@ import java.io.File
 internal interface GentleWakePreviewPlayer {
     fun setVolume(volume: Float)
 
+    fun setOnCompletionListener(listener: () -> Unit) = Unit
+
+    fun setOnErrorListener(listener: () -> Unit) = Unit
+
     fun stop()
 
     fun release()
@@ -32,6 +37,9 @@ internal interface GentleWakePreviewPlayer {
 
 internal fun interface GentleWakePreviewPlayerFactory {
     fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer?
+
+    fun create(uri: Uri, initialVolume: Float, looping: Boolean): GentleWakePreviewPlayer? =
+        create(uri, initialVolume)
 }
 
 internal sealed interface GentleWakePreviewPlaybackState {
@@ -44,52 +52,89 @@ internal sealed interface GentleWakePreviewPlaybackState {
     data object Failed : GentleWakePreviewPlaybackState
 }
 
+internal fun previewAudioPaths(
+    selectedPlaylist: WakePlaylist?,
+    entries: List<WakePlaylistEntry>,
+    legacyImportedPath: String?,
+    isLocalFile: (String) -> Boolean,
+): List<String?> =
+    if (selectedPlaylist == null) {
+        listOf(legacyImportedPath?.takeIf(isLocalFile))
+    } else {
+        entries
+            .filter { it.playlistId == selectedPlaylist.id }
+            .sortedBy(WakePlaylistEntry::position)
+            .map { it.track.storedPath.takeIf(isLocalFile) }
+    }
+
 /** Keeps source selection and player lifetime independent of Compose and Android construction. */
 internal class GentleWakePreviewPlaybackController(
-    private val importedAudioUri: Uri?,
+    private val playlistAudioUris: List<Uri?>,
     private val defaultAlarmUri: Uri?,
-    private val playerFactory: GentleWakePreviewPlayerFactory,
+    playerFactory: GentleWakePreviewPlayerFactory,
+    private val onStateChange: (GentleWakePreviewPlaybackState) -> Unit = {},
 ) {
-    private var player: GentleWakePreviewPlayer? = null
-    private var closed = false
+    constructor(
+        importedAudioUri: Uri?,
+        defaultAlarmUri: Uri?,
+        playerFactory: GentleWakePreviewPlayerFactory,
+    ) : this(listOf(importedAudioUri), defaultAlarmUri, playerFactory)
 
-    fun start(progress: Float): GentleWakePreviewPlaybackState {
-        check(player == null && !closed) { "Preview playback can only be started once" }
-        val volume = WakeRamp.frameAt(progress).audioVolume
+    private val playback =
+        WakePlaylistPlayback(
+            trackSources = playlistAudioUris,
+            fallbackSource = defaultAlarmUri,
+            playerFactory =
+                object : WakePlaylistPlayerFactory<Uri> {
+                    override fun create(
+                        source: Uri,
+                        initialGain: Float,
+                        onCompletion: () -> Unit,
+                        onError: () -> Unit,
+                    ): WakePlaylistPlayer? =
+                        playerFactory
+                            .create(
+                                source,
+                                initialGain,
+                                looping = source == defaultAlarmUri,
+                            )
+                            ?.let { previewPlayer ->
+                                previewPlayer.setOnCompletionListener(onCompletion)
+                                previewPlayer.setOnErrorListener(onError)
+                                object : WakePlaylistPlayer {
+                                    override fun setGain(gain: Float) =
+                                        previewPlayer.setVolume(gain)
 
-        if (importedAudioUri != null) {
-            player = playerFactory.create(importedAudioUri, volume)
-            if (player != null) return GentleWakePreviewPlaybackState.PlayingImported
+                                    override fun stop() = previewPlayer.stop()
 
-            player = defaultAlarmUri?.let { playerFactory.create(it, volume) }
-            return if (player != null) {
-                GentleWakePreviewPlaybackState.PlayingFallback
-            } else {
-                GentleWakePreviewPlaybackState.Failed
-            }
-        }
+                                    override fun release() = previewPlayer.release()
+                                }
+                            }
+                },
+            onStateChange = { onStateChange(it.toPreviewState()) },
+        )
 
-        player = defaultAlarmUri?.let { playerFactory.create(it, volume) }
-        return if (player != null) {
-            GentleWakePreviewPlaybackState.PlayingDefault
-        } else {
-            GentleWakePreviewPlaybackState.Failed
-        }
-    }
+    fun start(progress: Float): GentleWakePreviewPlaybackState =
+        playback.start(WakeRamp.frameAt(progress).audioVolume).toPreviewState()
 
     fun updateProgress(progress: Float) {
-        player?.setVolume(WakeRamp.frameAt(progress).audioVolume)
+        playback.updateGain(WakeRamp.frameAt(progress).audioVolume)
     }
 
-    fun close() {
-        if (closed) return
-        closed = true
-        player?.let { activePlayer ->
-            runCatching { activePlayer.stop() }
-            runCatching { activePlayer.release() }
+    fun close() = playback.close()
+
+    private fun WakePlaylistPlaybackState.toPreviewState(): GentleWakePreviewPlaybackState =
+        when (this) {
+            is WakePlaylistPlaybackState.PlayingTrack ->
+                GentleWakePreviewPlaybackState.PlayingImported
+            WakePlaylistPlaybackState.PlayingFallback ->
+                if (playlistAudioUris.any { it != null }) {
+                    GentleWakePreviewPlaybackState.PlayingFallback
+                } else {
+                    GentleWakePreviewPlaybackState.PlayingDefault
+                }
+            WakePlaylistPlaybackState.Failed -> GentleWakePreviewPlaybackState.Failed
         }
-        player = null
-    }
 }
 
 /**
@@ -99,7 +144,14 @@ internal class AndroidGentleWakePreviewPlayerFactory(context: Context) :
     GentleWakePreviewPlayerFactory {
     private val appContext = context.applicationContext
 
-    override fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer? {
+    override fun create(uri: Uri, initialVolume: Float): GentleWakePreviewPlayer? =
+        create(uri, initialVolume, looping = true)
+
+    override fun create(
+        uri: Uri,
+        initialVolume: Float,
+        looping: Boolean,
+    ): GentleWakePreviewPlayer? {
         var mediaPlayer: MediaPlayer? = null
         return try {
             mediaPlayer =
@@ -111,7 +163,7 @@ internal class AndroidGentleWakePreviewPlayerFactory(context: Context) :
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
-                    isLooping = true
+                    isLooping = looping
                     prepare()
                     val volume = initialVolume.coerceIn(0f, 1f)
                     setVolume(volume, volume)
@@ -137,6 +189,17 @@ private class AndroidGentleWakePreviewPlayer(private val mediaPlayer: MediaPlaye
         mediaPlayer.setVolume(gain, gain)
     }
 
+    override fun setOnCompletionListener(listener: () -> Unit) {
+        mediaPlayer.setOnCompletionListener { listener() }
+    }
+
+    override fun setOnErrorListener(listener: () -> Unit) {
+        mediaPlayer.setOnErrorListener { _, _, _ ->
+            listener()
+            true
+        }
+    }
+
     override fun stop() {
         if (mediaPlayer.isPlaying) mediaPlayer.stop()
     }
@@ -156,9 +219,24 @@ internal fun GentleWakePreviewRoute(
 ) {
     val context = LocalContext.current
     val importedAudioPath = AppContainer.settingsManager.getWakeProfile().importedAudioPath
-    val importedAudioUri =
+    val initialPaths =
         remember(importedAudioPath) {
-            importedAudioPath?.let(::File)?.takeIf { it.isFile }?.let(Uri::fromFile)
+            previewAudioPaths(null, emptyList(), importedAudioPath) { File(it).isFile }
+        }
+    val playlistAudioPaths by
+        produceState(initialValue = initialPaths, key1 = importedAudioPath) {
+            val selected =
+                runCatching { AppContainer.wakePlaylistStore.selectedPlaylistForWake() }.getOrNull()
+            val entries =
+                selected?.let { playlist ->
+                    runCatching { AppContainer.wakePlaylistStore.listEntries(playlist.id) }
+                        .getOrDefault(emptyList())
+                } ?: emptyList()
+            value = previewAudioPaths(selected, entries, importedAudioPath) { File(it).isFile }
+        }
+    val playlistAudioUris =
+        remember(playlistAudioPaths) {
+            playlistAudioPaths.map { path -> path?.let(::File)?.let(Uri::fromFile) }
         }
     val defaultAlarmUri = remember { RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM) }
     val playerFactory = remember(context) { AndroidGentleWakePreviewPlayerFactory(context) }
@@ -167,14 +245,14 @@ internal fun GentleWakePreviewRoute(
         progress = progress,
         onProgressChange = onProgressChange,
         onAwake = onAwake,
-        importedAudioUri = importedAudioUri,
+        playlistAudioUris = playlistAudioUris,
         defaultAlarmUri = defaultAlarmUri,
         playerFactory = playerFactory,
         modifier = modifier,
     )
 }
 
-/** Injectable boundary used by tests and by the production route above. */
+/** Legacy injectable boundary retained for single imported-file previews. */
 @Composable
 internal fun GentleWakePreviewRoute(
     progress: Float,
@@ -185,17 +263,40 @@ internal fun GentleWakePreviewRoute(
     playerFactory: GentleWakePreviewPlayerFactory,
     modifier: Modifier = Modifier,
 ) {
+    GentleWakePreviewRoute(
+        progress = progress,
+        onProgressChange = onProgressChange,
+        onAwake = onAwake,
+        playlistAudioUris = listOf(importedAudioUri),
+        defaultAlarmUri = defaultAlarmUri,
+        playerFactory = playerFactory,
+        modifier = modifier,
+    )
+}
+
+/** Injectable boundary for an ordered playlist preview. */
+@Composable
+internal fun GentleWakePreviewRoute(
+    progress: Float,
+    onProgressChange: (Float) -> Unit = {},
+    onAwake: () -> Unit,
+    playlistAudioUris: List<Uri?>,
+    defaultAlarmUri: Uri?,
+    playerFactory: GentleWakePreviewPlayerFactory,
+    modifier: Modifier = Modifier,
+) {
+    var playbackState by
+        remember(playlistAudioUris, defaultAlarmUri, playerFactory) {
+            mutableStateOf<GentleWakePreviewPlaybackState?>(null)
+        }
     val controller =
-        remember(importedAudioUri, defaultAlarmUri, playerFactory) {
+        remember(playlistAudioUris, defaultAlarmUri, playerFactory) {
             GentleWakePreviewPlaybackController(
-                importedAudioUri = importedAudioUri,
+                playlistAudioUris = playlistAudioUris,
                 defaultAlarmUri = defaultAlarmUri,
                 playerFactory = playerFactory,
+                onStateChange = { playbackState = it },
             )
-        }
-    var playbackState by
-        remember(controller) {
-            mutableStateOf<GentleWakePreviewPlaybackState?>(null)
         }
 
     DisposableEffect(controller) {
